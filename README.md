@@ -16,7 +16,7 @@ It is based on a Lolin C3 ESP32 and the BLDC motor is a TY3816B.
 > Mercedes W123/W124
 > Smiths 5/8" 
 
-Users are actively encouraged to submit new models & calibrations.
+Users are actively encouraged to submit new models & calibrations or feedback if models need adjusting. 
 
 ### More Detailed Instructions
 The last file on GitHub is the 'Installation Guide' and provides more detail.
@@ -29,15 +29,15 @@ Only three wires are required to operate the SpeedPulser:
 
 | Pin/ | Signal | Notes |
 |-----|--------|-------|
-| 1 | Vbatt | 12 V |
-| 2 | Ground/MALT | — |
-| 3 | 12v pulse | Square wave type signal |
+| 1 | Vbatt | 12V | Closest to edge of PCB
+| 2 | Ground/MALT | — | Middle of connector
+| 3 | Speed Signal | Square wave type input signal |
 
 For reference, the motor pinout is:
 | Pin/ | Signal | Notes |
 |-----|--------|-------|
-| 1 | Mpwr | Black - 5-9v adjustable |
-| 2 | N/A | Not used |
+| 1 | Motor Power | Black - 5-9v adjustable |
+| 2 | Motor Feedback | Not used |
 | 3 | Motor Direction | Green - ground to reverse |
 | 4 | Motor Ground | White - motor ground |
 | 5 | Motor PWM | 10kHz signal from ESP32 |
