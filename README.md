@@ -12,9 +12,14 @@ It is based on a Lolin C3 ESP32 and the BLDC motor is a TY3816B.
 ### Supported Models
 
 > MK1/MK2 Golf (120/140/160mph)
+
 > FIAT (160mph)
-> Mercedes W123/W124
+
+> Mercedes W123 (confirmed by Forbes / W124 (confirmed via. Discord)
+
 > Smiths 5/8" 
+
+> Volvo M12x1.5
 
 Users are actively encouraged to submit new models & calibrations or feedback if models need adjusting. 
 
