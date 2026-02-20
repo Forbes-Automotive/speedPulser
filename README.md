@@ -34,8 +34,8 @@ Only three wires are required to operate the SpeedPulser:
 
 | Pin/ | Signal | Notes |
 |-----|--------|-------|
-| 1 | Vbatt | 12V | Closest to edge of PCB
-| 2 | Ground/MALT | — | Middle of connector
+| 1 | Vbatt | 12V | Closest to edge of PCB |
+| 2 | Ground/MALT | — | Middle of connector |
 | 3 | Speed Signal | Square wave type input signal |
 
 For reference, the motor pinout is:
