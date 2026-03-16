@@ -22,4 +22,6 @@ V1.15 - added 'calibration mode' - to be able to go through with buttons on WiFi
 V1.16 - Sam Wade provided a 160mph cluster - speed corrected to suit.  New array(!).  Calibration selection incorrect and shifted '1' down!
 V1.17 - added 70mph Smiths cluster - uses a 5/8 18tpi housing
 V1.18 - added Over-the-Air updates
+V1.19 - added 90mph Smiths cluster
+V1.20 - added 150mph Smiths cluster
 */

@@ -27,9 +27,9 @@ void setupUI() {
   ESPUI.addControl(Option, "FIAT - 20-110mph; Forbes-Automotive", "FIAT160Forbes2", Dark, int16_calNumber);
   ESPUI.addControl(Option, "Merc - 120mph; Forbes-Automotive", "Merc120Forbes", Dark, int16_calNumber);
   ESPUI.addControl(Option, "Smiths - 70mph; Forbes-Automotive", "Smiths70Forbes", Dark, int16_calNumber);
-  ESPUI.addControl(Option, "FutureCal1; Forbes-Automotive", "FutureCal1", Dark, int16_calNumber);  // purely for future cals so WiFi is already pre-defined
-  ESPUI.addControl(Option, "FutureCal2; Forbes-Automotive", "FutureCal2", Dark, int16_calNumber);  // purely for future cals so WiFi is already pre-defined
-  ESPUI.addControl(Option, "FutureCal3; Forbes-Automotive", "FutureCal3", Dark, int16_calNumber);  // purely for future cals so WiFi is already pre-defined
+  ESPUI.addControl(Option, "Smiths - 90mph; Forbes-Automotive", "Smiths90Forbes", Dark, int16_calNumber);  // purely for future cals so WiFi is already pre-defined
+  ESPUI.addControl(Option, "Smiths - 150mph; Forbes-Automotive", "Smiths150Forbes", Dark, int16_calNumber);          // purely for future cals so WiFi is already pre-defined
+  ESPUI.addControl(Option, "FutureCal3; Forbes-Automotive", "FutureCal3", Dark, int16_calNumber);          // purely for future cals so WiFi is already pre-defined
 
   ESPUI.addControl(Separator, "Testing", "", Dark, tabAdvanced);
   bool_testSpeedo = ESPUI.addControl(Switcher, "Test Speedo", "", Dark, tabAdvanced, generalCallback);
@@ -119,8 +119,9 @@ void generalCallback(Control *sender, int type) {
       if (sender->value == "FIAT160Forbes2") motorPerformanceVal = 9;
       if (sender->value == "Merc120Forbes") motorPerformanceVal = 10;
       if (sender->value == "Smiths70Forbes") motorPerformanceVal = 11;
-      if (sender->value == "FutureCal1") motorPerformanceVal = 12;
-      if (sender->value == "FutureCal2") motorPerformanceVal = 13;
+      if (sender->value == "Smiths90Forbes") motorPerformanceVal = 12;
+      if (sender->value == "Smiths150Forbes") motorPerformanceVal = 13;
+
       if (sender->value == "FutureCal3") motorPerformanceVal = 14;
 
       updateMotorPerformance = true;
@@ -263,10 +264,10 @@ void updateLabels() {
       ESPUI.updateSelect(int16_calNumber, "Smiths70Forbes");
       break;
     case 12:
-      ESPUI.updateSelect(int16_calNumber, "Smiths70Forbes");
+      ESPUI.updateSelect(int16_calNumber, "Smiths90Forbes");
       break;
     case 13:
-      ESPUI.updateSelect(int16_calNumber, "Smiths70Forbes");
+      ESPUI.updateSelect(int16_calNumber, "Smiths150Forbes");
       break;
     case 14:
       ESPUI.updateSelect(int16_calNumber, "Smiths70Forbes");

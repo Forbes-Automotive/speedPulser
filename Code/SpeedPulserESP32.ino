@@ -66,6 +66,7 @@ void setup() {
   connectWifi();                       // enable / start WiFi
   WiFi.setSleep(false);                //For the ESP32: turn off sleeping to increase UI responsivness (at the cost of power use)
   setupUI();                           // setup wifi user interface
+  setupOTA();                          // setup Over-the-Air updates
   WiFi.setTxPower(WIFI_POWER_8_5dBm);  // some C3 boards require a lower Tx power otherwise it won't appear
 
   updateLabels();  // set base values for WiFi
@@ -89,12 +90,12 @@ void loop() {
     }
   }
 
-  if (testNeedleSweep) { // for flag set in WiFi for testing needle sweep
+  if (testNeedleSweep) {  // for flag set in WiFi for testing needle sweep
     needleSweep();
     testNeedleSweep = false;
   }
 
-  if (updateMotorPerformance) { // only refresh the motor array if cal. changed
+  if (updateMotorPerformance) {  // only refresh the motor array if cal. changed
     updateMotorArray();
   }
 
