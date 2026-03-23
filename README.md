@@ -68,9 +68,13 @@ Once the motor is built up, it can be slid over the OEM cluster. Fitment of the 
 #### Software Benefits
 The SpeedPulser is now WiFi capable which means that all of the necessary calibration settings are available for changing in WiFi.  It will store these settings in EEPROM.  
 > Fully calibrated motor: Duty Percentage vs. Resulting Speed
+
 > Needle Sweep available
+
 > WiFi Enabled
+
 > 5-point offset curve
+
 > Over the Air Updates
 
 #### WiFi Support
@@ -81,13 +85,21 @@ Connect to 'SpeedPulser' on WiFi and use IP Address 192.168.1.1 in your browser 
 Initial calibration will be carried out using the WiFi feature.
 
 > Connect to SpeedPulser on WiFi
+
 > Go to 192.168.1.1
+
 > Select 'Configuration'
+
 > Select the calibration you wish to use
+
 > Enable 'Speed Test Mode'
+
 > Select 'Test Speed Value' and choose the highest value on your cluster
+
 > Adjust the blue potentiometer to the maximum valve
+
 > Use 'Go to Speed' to confirm random speeds and ensure that it matches
+
 > Use Global or Curve Offsets to achieve perfect output!
 
 ### Fine Tuning Calibration
@@ -96,18 +108,26 @@ If the speedometer is consistently out by a factor - the 'Offset' option can be 
 ## Calibration of Other Speedometers
 
 > Connect to SpeedPulser on WiFi
-> Go to 192.168.1.1
-> Select 'Calibration'
-> Choose 'Previous' - this will roll over the duty cycle to 385 - this is the maximum speed avaiable for your calibration
-> Adjust the blue potentiometer to the maximum speed you wish to calibrate to (likely the top speed of the speedometer)
-> Choose 'Next' - this will reset the duty cycle back to 0 
-> Choose 'Next' until the motor begins to turn.  This is the lowest speed the motor can achieve
-> Begin filling the Excel sheet with each speed at each duty cycle
-> Copy these values into a Word document and carry out a 'Find/Replace'.  Find "^p" and replace with ",".  This is a quick way to change all the new lines with commas
-> Copy the array from Word into the suitable '_motorCal' array and upload the code
-> Submit to GitHub for others to use!
 
-![SpeedPulserCoupler](/Images/WiFiConn4.jpg)
+> Go to 192.168.1.1
+
+> Select 'Calibration'
+
+> Choose 'Previous' - this will roll over the duty cycle to 385 - this is the maximum speed avaiable for your calibration
+
+> Adjust the blue potentiometer to the maximum speed you wish to calibrate to (likely the top speed of the speedometer)
+
+> Choose 'Next' - this will reset the duty cycle back to 0 
+
+> Choose 'Next' until the motor begins to turn.  This is the lowest speed the motor can achieve
+
+> Begin filling the Excel sheet with each speed at each duty cycle
+
+> Copy these values into a Word document and carry out a 'Find/Replace'.  Find "^p" and replace with ",".  This is a quick way to change all the new lines with commas
+
+> Copy the array from Word into the suitable '_motorCal' array and upload the code
+
+> Submit to GitHub for others to use!
 
 ## Understanding the Excel
 There is a plot of motor speed vs. PWM in an Excel.  Should it be required, the module can be put into 'testing mode' and each PWM variance worked through in 5 second intervals.  It takes around 10 minutes to carry out a full sweep of the available speeds, but will give good accuracy.  
