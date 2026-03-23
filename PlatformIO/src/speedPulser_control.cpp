@@ -141,6 +141,11 @@ void speedControlTask(void *parameter) {
 
     // Reset speed to zero if no pulses received for durationReset ms
     if ((xTaskGetTickCount() - lastPulse) > pdMS_TO_TICKS(durationReset)) {
+      dutyCycleIncoming = 0;
+      dutyCycle = 0;
+      rawCount = 0;
+      samples.clear();
+
       if (!testSpeedo && !testCal) {
         ledcWrite(LEDC_CHANNEL_MOTOR, 0);
         appliedDutyCycle = 0;

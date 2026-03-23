@@ -358,10 +358,10 @@ async function fetchStatus() {
     updateDashboard(data.dutyCycleIncoming, data.appliedDutyCycle, false);
 
     // Advanced status monitor
-    document.getElementById('motorPerformanceVal').textContent = data.motorPerformanceVal || '--';
-    document.getElementById('dutyCycleIncoming').textContent = data.dutyCycleIncoming || '--';
-    document.getElementById('rawCount').textContent = data.rawCount || '--';
-    document.getElementById('ledCounter').textContent = data.ledCounter || '--';
+    document.getElementById('motorPerformanceVal').textContent = data.motorPerformanceVal ?? '--';
+    document.getElementById('dutyCycleIncoming').textContent = data.dutyCycleIncoming ?? '--';
+    document.getElementById('rawCount').textContent = data.rawCount ?? '--';
+    document.getElementById('ledCounter').textContent = data.ledCounter ?? '--';
 
     // Calibration status
     document.getElementById('calibrationDuty').textContent = (data.tempDutyCycle || 0) + ' / 385';
