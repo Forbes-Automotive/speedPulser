@@ -7,7 +7,7 @@ The device takes the signals and converts them into signals to suit analog clust
 
 It is based on a Lolin C3 ESP32 and the BLDC motor is a TY3816B.
 
-![SpeedPulserCoupler](/Images/BoardOverview.png)
+![SpeedPulserUI](/Images/speedPulserUI.png)
 
 ### Supported Models
 
@@ -29,13 +29,17 @@ The last file on GitHub is the 'Installation Guide' and provides more detail.
 ### Purchase
 If you want to purchase an assembled SpeedPulser, you can do so here: [SpeedPulser - Forbes Automotive](https://forbes-automotive.com/products/speedpulser)
 
+### PCB
+The pre-assembled PCB:
+![SpeedPulserCoupler](/Images/BoardOverview.png)
+
 #### Installation
 Only three wires are required to operate the SpeedPulser:
 
 | Pin/ | Signal | Notes |
 |-----|--------|-------|
 | 1 | Vbatt | 12V | Closest to edge of PCB |
-| 2 | Ground/MALT | — | Middle of connector |
+| 2 | Ground | — | Middle of connector |
 | 3 | Speed Signal | Square wave type input signal |
 
 For reference, the motor pinout is:
@@ -66,6 +70,8 @@ The SpeedPulser is now WiFi capable which means that all of the necessary calibr
 > Fully calibrated motor: Duty Percentage vs. Resulting Speed
 > Needle Sweep available
 > WiFi Enabled
+> 5-point offset curve
+> Over the Air Updates
 
 #### WiFi Support
 WiFi is now enabled for easier on-the-fly setup.  Needle sweep & calibration can be done without needing to mess with complicated firmware.
@@ -76,15 +82,13 @@ Initial calibration will be carried out using the WiFi feature.
 
 > Connect to SpeedPulser on WiFi
 > Go to 192.168.1.1
-> Select 'Advanced Controls'
+> Select 'Configuration'
 > Select the calibration you wish to use
-> Choose 'Test Speed'
-> Select 'Go to Speed' and choose the highest value on your cluster
+> Enable 'Speed Test Mode'
+> Select 'Test Speed Value' and choose the highest value on your cluster
 > Adjust the blue potentiometer to the maximum valve
 > Use 'Go to Speed' to confirm random speeds and ensure that it matches
-
-![SpeedPulserCoupler](/Images/WiFiConn3.jpg)
-![SpeedPulserCoupler](/Images/WiFiConn2.jpg)
+> Use Global or Curve Offsets to achieve perfect output!
 
 ### Fine Tuning Calibration
 If the speedometer is consistently out by a factor - the 'Offset' option can be used to adjust the speedometer.  The 'Positive Offset' switch will ADD the chosen offset.  If the switch remains off, it will SUBTRACT the chosen offset.
