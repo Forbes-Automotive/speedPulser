@@ -39,6 +39,6 @@ Notes:
 - ESP32 C3 is the primary target board (LOLIN C3)
 */
 
-#define VERSION "1.19"
+#define VERSION "2.01"
 
 #endif  // SPEED_PULSER_VER_H
