@@ -153,6 +153,10 @@ function initControls() {
             document.getElementById('calibrationStatus').textContent = `Cal: ${selectedOption.textContent}`;
           }
         }
+
+        if (id === 'convertToMPH') {
+          applySpeedUnitLabels(el.checked);
+        }
       });
       // For sliders, also update live display
       if (el.type === 'range') {
@@ -261,14 +265,23 @@ function initControls() {
 }
 
 
+function applySpeedUnitLabels(useMPH) {
+  const label = useMPH ? 'MPH' : 'KMH';
+  const ids = ['speedUnit', 'speedOffsetUnit'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = label;
+  });
+}
+
+
 async function fetchSettings() {
   try {
     const response = await fetch('/api/settings');
     const data = await response.json();
 
     // Load all settings from API
-    document.getElementById('hasNeedleSweep').checked = data.hasNeedleSweep || false;
-    document.getElementById('sweepSpeed').value = data.sweepSpeed || 18;
+    document.getElementById('hasNeedleSweep').checked = data.hasNeedleSweep || false;    document.getElementById('sweepSpeed').value = data.sweepSpeed || 18;
     document.getElementById('sweepSpeed-display').textContent = data.sweepSpeed || 18;
 
     document.getElementById('motorCalSelection').value = data.motorPerformanceVal || 1;
@@ -285,6 +298,7 @@ async function fetchSettings() {
     document.getElementById('speedOffset').value = data.speedOffset || 0;
     document.getElementById('speedOffset-display').textContent = data.speedOffset || 0;
     document.getElementById('convertToMPH').checked = data.convertToMPH || false;
+    applySpeedUnitLabels(!!data.convertToMPH);
 
     document.getElementById('useSpeedOffsetCurve').checked = data.useSpeedOffsetCurve || false;
 

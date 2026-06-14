@@ -28,6 +28,10 @@ V1.17 - added 70mph Smiths cluster - uses a 5/8 18tpi housing
 V1.18 - added Over-the-Air updates
 V1.19 - added 90mph Smiths cluster
 
+V2.00 - ported to PlatformIO
+V2.10 - Changed to PWM LEDc support
+V2.20 - added Cluster in MPH
+
 Notes:
 - Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor
 - Converts to PWM signal for a BLDC motor
@@ -39,6 +43,6 @@ Notes:
 - ESP32 C3 is the primary target board (LOLIN C3)
 */
 
-#define VERSION "2.01"
+#define VERSION "2.20"
 
 #endif  // SPEED_PULSER_VER_H
