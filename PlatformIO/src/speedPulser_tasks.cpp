@@ -4,7 +4,6 @@
 
 // ===== Task Handles =====
 TaskHandle_t eepromTaskHandle = NULL;
-TaskHandle_t wifiTaskHandle = NULL;
 TaskHandle_t speedControlTaskHandle = NULL;
 
 // ===== EEPROM Task =====
@@ -20,51 +19,12 @@ void eepromTask(void *parameter) {
   }
 }
 
-// ===== WiFi Task =====
-// After an initial 60 s grace period, checks every 30 s whether any stations
-// are still connected. Turns WiFi off and self-deletes once no clients remain.
-void wifiTask(void *parameter) {
-  const uint32_t INITIAL_DELAY  = wifiDisable;       // 60 000 ms — let user connect
-  const uint32_t CHECK_INTERVAL = 30000;             // 30 s between re-checks
-  bool hadClientConnection = false;
-
-  // Wait for the grace period before the first check
-  vTaskDelay(pdMS_TO_TICKS(INITIAL_DELAY));
-
-  while (1) {
-    const int stationCount = WiFi.softAPgetStationNum();
-
-    if (stationCount > 0) {
-      hadClientConnection = true;
-    }
-
-#if serialDebugWifi
-    DEBUG_PRINTLN("WiFi task: checking station count...");
-#endif
-
-    if (hadClientConnection && stationCount == 0) {
-      // No clients connected — shut WiFi down and exit
-#if serialDebugWifi
-      DEBUG_PRINTLN("No stations connected, turning off WiFi");
-#endif
-      WiFi.disconnect(true, false);
-      WiFi.mode(WIFI_OFF);
-#if serialDebugWifi
-      DEBUG_PRINTLN("WiFi turned off");
-#endif
-      vTaskDelete(NULL);
-    }
-
-#if serialDebugWifi
-    if (!hadClientConnection) {
-      DEBUG_PRINTLN("No clients have connected yet, keeping WiFi on");
-    } else {
-      DEBUG_PRINTF("Stations still connected: %d - keeping WiFi on\n", stationCount);
-    }
-#endif
-    vTaskDelay(pdMS_TO_TICKS(CHECK_INTERVAL));
-  }
-}
+// NOTE: WiFi management has been moved to power_manager (see power_manager.h).
+// The old wifiTask (which disconnected WiFi after inactivity) is superseded by
+// the power_manager background task, which also handles CPU frequency scaling
+// and Bluetooth release. powerInit() is called from main.cpp after connectWifi()
+// and setupWebServer(). The powerIsBusy / powerOnEnterReduced / powerOnExitReduced
+// hooks live in speedPulser_wifi.cpp.
 
 // ===== Task Initialisation =====
 // Create all FreeRTOS tasks
@@ -79,17 +39,6 @@ void taskInit(void) {
     NULL,                          // Parameter passed
     EEPROM_TASK_PRIORITY,          // Task priority
     &eepromTaskHandle,             // Task handle
-    0                              // Core 0
-  );
-
-  // Create WiFi disconnect task
-  xTaskCreatePinnedToCore(
-    wifiTask,                      // Function to implement the task
-    "wifiTask",                    // Name of the task
-    WIFI_TASK_STACK_SIZE,          // Stack size
-    NULL,                          // Parameter passed
-    WIFI_TASK_PRIORITY,            // Task priority
-    &wifiTaskHandle,               // Task handle
     0                              // Core 0
   );
 

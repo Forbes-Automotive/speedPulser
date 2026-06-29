@@ -288,7 +288,7 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
       tempSpeed = 0;
       dutyCycle = 0;
       appliedDutyCycle = 0;
-      ledcWrite(LEDC_CHANNEL_MOTOR, 0);
+      setMotorDuty(0);
     }
   } else if (strcmp(key, "tempSpeed") == 0) {
     tempSpeed = value.as<uint16_t>();

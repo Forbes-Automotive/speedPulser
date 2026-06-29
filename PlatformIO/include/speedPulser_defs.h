@@ -91,6 +91,7 @@ void normaliseSpeedOffsetCurve();
 
 // Function declarations - I/O module
 void basicInit();
+void setMotorDuty(uint32_t duty);
 void testSpeed();
 void needleSweep();
 

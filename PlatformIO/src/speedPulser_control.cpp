@@ -147,7 +147,7 @@ void speedControlTask(void *parameter) {
       samples.clear();
 
       if (!testSpeedo && !testCal) {
-        ledcWrite(LEDC_CHANNEL_MOTOR, 0);
+        setMotorDuty(0);
         appliedDutyCycle = 0;
       }
       // Speed display updated via REST API
@@ -192,7 +192,7 @@ void speedControlTask(void *parameter) {
             finalDuty = finalDuty * mphFactor;
           }
           finalDuty = findClosestMatch(finalDuty);
-          ledcWrite(LEDC_CHANNEL_MOTOR, finalDuty);
+          setMotorDuty(finalDuty);
           appliedDutyCycle = finalDuty;
 
           DEBUG_PRINTF("FindClosestMatchHall: %d", finalDuty);

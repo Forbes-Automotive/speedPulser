@@ -3,6 +3,7 @@
 #include "speedPulser_ver.h"
 #include "speedPulser_control.h"
 #include "speedPulser_tasks.h"
+#include "power_manager.h"
 
 /*
 SpeedPulser - Forbes Automotive '26
@@ -31,7 +32,7 @@ void setup()
     updateMotorArray(); // Update motor calibration array from EEPROM
 
     basicInit();                      // Initialize GPIO, LEDC PWM, interrupts
-    ledcWrite(LEDC_CHANNEL_MOTOR, 0); // Motor off initially
+    setMotorDuty(0);                  // Motor off initially
   
     connectWifi();    // Enable WiFi and start AP/Station
     setupWebServer(); // Setup REST API web server and serve web files
@@ -41,7 +42,15 @@ void setup()
         needleSweep(); // Run needle sweep calibration if enabled
     }
 
-    taskInit(); // start FreeRTOS tasks for speed control, EEPROM management, and WiFi management
+    // Universal reduced-power module: turns WiFi off 1 min after the last client
+    // disconnects, scales CPU 160->80 MHz, releases Bluetooth and cuts current
+    // draw through the linear regulator. Auto-detects LOLIN C3 at compile time
+    // (160 MHz cap, no LED pin).
+    power_config_t pcfg = powerDefaultConfig();
+    pcfg.verbose = serialDebugWifi;
+    powerInit(&pcfg);
+
+    taskInit(); // start FreeRTOS tasks for speed control, EEPROM management
 }
 
 void loop()

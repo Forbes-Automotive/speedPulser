@@ -41,12 +41,22 @@ void basicInit()
     DEBUG_PRINTLN("Initialised SpeedPulser!");
 }
 
+// Write the motor PWM duty via the ESP-IDF LEDC driver. The channel is set up
+// with ledc_channel_config() above, so duty must be written the IDF way too.
+// (Arduino-ESP32 3.x made ledcWrite() pin-based and it no longer recognises
+// channels created outside its own ledcAttach() bookkeeping.)
+void setMotorDuty(uint32_t duty)
+{
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_MOTOR, duty);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_MOTOR);
+}
+
 void testSpeed()
 {
     // check to see if tempSpeed has a value.  IF it does (>0), set the speed using the 'find closest match' as a duty cycle
     if (testCal)
     {
-        ledcWrite(LEDC_CHANNEL_MOTOR, tempDutyCycle);
+        setMotorDuty(tempDutyCycle);
         appliedDutyCycle = tempDutyCycle;
 #if serialDebug
         DEBUG_PRINTF("     Duty: %d", tempDutyCycle);
@@ -67,12 +77,12 @@ void testSpeed()
                 dutyCycle = dutyCycle * mphFactor;
             }
             dutyCycle = findClosestMatch(dutyCycle);
-            ledcWrite(LEDC_CHANNEL_MOTOR, dutyCycle);
+            setMotorDuty(dutyCycle);
             appliedDutyCycle = dutyCycle;
         }
         else
         {
-            ledcWrite(LEDC_CHANNEL_MOTOR, 0);
+            setMotorDuty(0);
             appliedDutyCycle = 0;
         }
 #if serialDebug
@@ -103,5 +113,5 @@ void needleSweep()
     vTaskDelay(pdMS_TO_TICKS((uint32_t)sweepSpeed * 2));
     dutyCycle = 0;
     appliedDutyCycle = 0;
-    ledcWrite(LEDC_CHANNEL_MOTOR, 0);  // ensure output is fully off after sweep
+    setMotorDuty(0);  // ensure output is fully off after sweep
 }

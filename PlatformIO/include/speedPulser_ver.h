@@ -31,6 +31,7 @@ V1.19 - added 90mph Smiths cluster
 V2.00 - ported to PlatformIO
 V2.10 - Changed to PWM LEDc support
 V2.20 - added Cluster in MPH
+V2.21 - fixed LEDC motor output for Arduino-ESP32 3.x: ledcWrite() is now pin-based and ignores channels created via ledc_channel_config(). Replaced all motor ledcWrite() calls with native ledc_set_duty()/ledc_update_duty() via setMotorDuty().
 
 Notes:
 - Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor
@@ -43,6 +44,6 @@ Notes:
 - ESP32 C3 is the primary target board (LOLIN C3)
 */
 
-#define VERSION "2.20"
+#define VERSION "2.21"
 
 #endif  // SPEED_PULSER_VER_H
