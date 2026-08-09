@@ -12,10 +12,12 @@ extern TaskHandle_t speedControlTaskHandle;
 #define SPEED_TASK_PRIORITY     (tskIDLE_PRIORITY + 2)  // Higher priority for speed control
 
 #define EEPROM_TASK_STACK_SIZE  4096
-#define SPEED_TASK_STACK_SIZE   2048
+#define SPEED_TASK_STACK_SIZE   8192   // headroom for PID float math + DEBUG_FB Serial.printf("%f"),
+                                       // which only runs on the feedback path
 
 // ===== Task Function Declarations =====
 void eepromTask(void *parameter);    // EEPROM save task (every 2 seconds)
+void speedControlTask(void *parameter); // Speed control task (PID loop)
 void taskInit(void);                 // Initialize all tasks
 // NOTE: WiFi management is handled by power_manager — see power_manager.h.
 

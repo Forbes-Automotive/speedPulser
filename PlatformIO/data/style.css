@@ -926,3 +926,254 @@ header h1 {
         grid-template-columns: 1fr;
     }
 }
+
+/* ===== SpeedPulserV2 branding + calibration builder ===== */
+.brand-badge {
+    display: inline-block;
+    background: var(--primary);
+    color: var(--background);
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    padding: 0.1rem 0.45rem;
+    border-radius: 6px;
+    vertical-align: middle;
+    margin-left: 0.35rem;
+}
+
+.cal-graph-wrap {
+    position: relative;
+    width: 100%;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.5rem;
+}
+
+.cal-graph {
+    display: block;
+    width: 100%;
+    height: auto;
+    touch-action: none;
+}
+
+.cal-graph-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+
+.cal-graph-legend .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.cal-graph-legend .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    display: inline-block;
+}
+
+.cal-graph-legend .legend-swatch.curve {
+    background: var(--primary);
+    opacity: 0.45;
+}
+
+.cal-graph-legend .legend-swatch.point {
+    background: var(--secondary);
+    border-radius: 50%;
+}
+
+.cal-graph-legend .legend-swatch.capture {
+    background: var(--success);
+    border-radius: 50%;
+}
+
+.cal-duty-readout {
+    text-align: center;
+    padding: 1rem;
+    background: var(--surface-light);
+    border-radius: 8px;
+    margin: 1rem 0;
+}
+
+.cal-duty-value {
+    font-size: 2.75rem;
+    font-weight: 800;
+    color: var(--primary);
+    line-height: 1;
+}
+
+.cal-duty-value small {
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    font-weight: 600;
+}
+
+.cal-duty-sub {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    margin-top: 0.4rem;
+}
+
+.stepper-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.4rem;
+}
+
+.stepper-btn {
+    padding: 1.1rem 0.25rem;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 1.05rem;
+    font-weight: 700;
+    cursor: pointer;
+    user-select: none;
+    touch-action: manipulation;
+    transition: background 0.12s, border-color 0.12s;
+}
+
+.stepper-btn:hover {
+    border-color: var(--primary);
+}
+
+.stepper-btn:active {
+    background: var(--primary);
+    color: var(--background);
+    border-color: var(--primary);
+}
+
+.stepper-btn.coarse {
+    background: #2a313a;
+}
+
+.stepper-btn.fine {
+    border-color: var(--primary);
+}
+
+.chip-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+    gap: 0.4rem;
+}
+
+.chip {
+    padding: 0.75rem 0.25rem;
+    background: var(--surface-light);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+
+.chip:hover {
+    border-color: var(--primary);
+}
+
+.chip.active {
+    background: var(--primary);
+    color: var(--background);
+    border-color: var(--primary);
+}
+
+.cal-subhead {
+    font-size: 1rem;
+    color: var(--text-dim);
+    margin: 1.25rem 0 0.5rem;
+}
+
+.cal-points {
+    background: var(--surface-light);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+}
+
+.cal-point-head,
+.cal-point-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 2.5rem;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+}
+
+.cal-point-head {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+}
+
+.cal-point-row {
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+}
+
+.cal-point-row:last-child {
+    border-bottom: none;
+}
+
+.cal-point-row span:first-child {
+    color: var(--primary);
+}
+
+.cal-del {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--danger);
+    border-radius: 6px;
+    padding: 0.3rem;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.cal-del:hover {
+    background: var(--danger);
+    color: white;
+    border-color: var(--danger);
+}
+
+.cal-action-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+    margin-top: 1rem;
+}
+
+.cal-textarea {
+    width: 100%;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    font-size: 0.8rem;
+    resize: vertical;
+}
+
+.cal-textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+@media (max-width: 480px) {
+    .stepper-btn {
+        font-size: 0.9rem;
+        padding: 1rem 0.15rem;
+    }
+}

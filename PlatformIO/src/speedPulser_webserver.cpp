@@ -2,7 +2,8 @@
 #include "speedPulser_webserver.h"
 #include "speedPulser_ver.h"
 #include "speedPulser_control.h"
-#include <Update.h>
+#include "speedPulser_calBuilder.h"
+#include "ota_manager.h"
 
 extern AsyncWebServer server;
 
@@ -13,18 +14,18 @@ void setupWebServer() {
   // Always bring up API endpoints, even if static FS is unavailable.
   bool littleFsMounted = LittleFS.begin(false);
   if (!littleFsMounted) {
-    DEBUG_PRINTLN("LittleFS mount failed; attempting format + remount...");
+    DEBUG_WEB("LittleFS mount failed; attempting format + remount...");
     littleFsMounted = LittleFS.begin(true);
     if (littleFsMounted) {
-      DEBUG_PRINTLN("LittleFS remounted after format");
+      DEBUG_WEB("LittleFS remounted after format");
     } else {
-      DEBUG_PRINTLN("LittleFS remount failed");
+      DEBUG_WEB("LittleFS remount failed");
     }
   }
 
   if (littleFsMounted) {
     if (!LittleFS.exists("/index.html")) {
-      DEBUG_PRINTLN("LittleFS mounted but /index.html is missing");
+      DEBUG_WEB("LittleFS mounted but /index.html is missing");
     }
 
     // Serve static files from filesystem image
@@ -51,8 +52,8 @@ void setupWebServer() {
   // GET /api/test-status - Return minimal live test-speed data
   server.on("/api/test-status", HTTP_GET, handleGetTestStatus);
 
-  // GET /api/version - Return firmware version
-  server.on("/api/version", HTTP_GET, handleGetVersion);
+  // GET /api/calcurve - Return the active calibration curve (duty vs speed)
+  server.on("/api/calcurve", HTTP_GET, handleGetCalCurve);
 
   // POST /api/control - Update settings
   server.on("/api/control", HTTP_POST, 
@@ -66,50 +67,26 @@ void setupWebServer() {
     nullptr,                                  // no upload handler
     handlePostAction);                        // onBody callback
 
-  // POST /api/ota-update - OTA firmware upload
-  server.on("/api/ota-update", HTTP_POST,
-    // onRequest: send final response after upload completes
-    [](AsyncWebServerRequest *request) {
-      bool success = !Update.hasError();
-      AsyncWebServerResponse *response = request->beginResponse(
-        200, "application/json",
-        success ? "{\"status\":\"ok\",\"message\":\"Update complete. Rebooting...\"}" 
-                : "{\"status\":\"error\",\"message\":\"Update failed\"}"
-      );
-      response->addHeader("Connection", "close");
-      request->send(response);
-      if (success) {
-        delay(500);
-        ESP.restart();
-      }
-    },
-    // onUpload: stream incoming binary to Update
-    [](AsyncWebServerRequest *request, const String &filename,
-       size_t index, uint8_t *data, size_t len, bool final) {
-      if (index == 0) {
-        DEBUG_PRINTF("OTA update starting: %s\n", filename.c_str());
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
-          DEBUG_PRINTF("OTA begin failed: %s\n", Update.errorString());
-        }
-      }
-      if (Update.isRunning()) {
-        if (Update.write(data, len) != len) {
-          DEBUG_PRINTF("OTA write failed: %s\n", Update.errorString());
-        }
-      }
-      if (final) {
-        if (Update.end(true)) {
-          DEBUG_PRINTF("OTA complete: %u bytes\n", index + len);
-        } else {
-          DEBUG_PRINTF("OTA end failed: %s\n", Update.errorString());
-        }
-      }
-    }
-  );
+  // GET /api/cal - Return the SpeedPulserV2 custom calibration builder state
+  server.on("/api/cal", HTTP_GET, handleGetCal);
+
+  // POST /api/cal - Custom calibration builder operations
+  server.on("/api/cal", HTTP_POST,
+    [](AsyncWebServerRequest *request) {},  // empty onRequest
+    nullptr,                                  // no upload handler
+    handlePostCal);                           // onBody callback
+
+  // OTA (firmware + LittleFS web UI) via the shared, project-agnostic module.
+  // Registers POST /api/ota-update?mode=firmware|filesystem and GET /api/version.
+  OtaInfo otaInfo;
+  otaInfo.version = VERSION;
+  otaInfo.hardware = "ESP32-C3";
+  otaInfo.board = "LOLIN C3 Mini";
+  otaBegin(server, otaInfo, (enableDebug && debugWeb));
 
   // Start server
   server.begin();
-  DEBUG_PRINTLN("Web server started");
+  DEBUG_WEB("web server started");
 }
 
 /**
@@ -134,6 +111,16 @@ void handleGetSettings(AsyncWebServerRequest *request) {
     speedCurveOffsets.add(speedOffsetCurveOffsets[i]);
   }
   doc["averageFilter"] = averageFilter;
+
+  // Direction & feedback (PID)
+  doc["reverseDirection"] = reverseDirection;
+  doc["feedbackEnable"] = feedbackEnable;
+  doc["pidKp"] = pidKp;
+  doc["pidKi"] = pidKi;
+  doc["pidKd"] = pidKd;
+  doc["feedbackDeadband"] = feedbackDeadband;
+  doc["feedbackMaxFreq"] = feedbackMaxFreq;
+  doc["feedbackMinSpeed"] = feedbackMinSpeed;
 
   // Test mode settings
   doc["testSpeedo"] = testSpeedo;
@@ -162,6 +149,13 @@ void handleGetCalibrations(AsyncWebServerRequest *request) {
     item["name"] = getCalibrationText(i);
   }
 
+  // SpeedPulserV2 custom calibration slot — only offered once it has anchors.
+  if (customCalCount >= 2) {
+    JsonObject item = calibrations.add<JsonObject>();
+    item["id"] = CUSTOM_CAL_ID;
+    item["name"] = String("\u2605 Custom: ") + customCalName;
+  }
+
   String response;
   serializeJson(doc, response);
   request->send(200, "application/json", response);
@@ -177,6 +171,7 @@ void handleGetStatus(AsyncWebServerRequest *request) {
   doc["dutyCycle"] = dutyCycle;
   doc["appliedDutyCycle"] = appliedDutyCycle;
   doc["dutyCycleIncoming"] = dutyCycleIncoming;
+  doc["incomingSpeed"] = requestedSpeed;
   doc["motorPerformanceVal"] = motorPerformanceVal;
   doc["calibrationText"] = getCalibrationText(motorPerformanceVal);
   doc["rawCount"] = rawCount;
@@ -187,6 +182,13 @@ void handleGetStatus(AsyncWebServerRequest *request) {
   doc["testNeedleSweep"] = testNeedleSweep;
   doc["speedOffsetType"] = useSpeedOffsetCurve ? "Curve" : "Global";
   doc["currentSpeedOffset"] = currentSpeedOffset;
+  doc["reverseDirection"] = reverseDirection;
+  doc["feedbackEnable"] = feedbackEnable;
+  doc["measuredSpeed"] = measuredSpeed;
+  doc["pidCorrection"] = pidCorrection;
+  doc["measuredFreqRawHz"] = measuredFreqRawHz;
+  doc["feedbackAvailable"] = feedbackAvailable;
+  doc["feedbackMissing"] = feedbackMissing;
 
   String response;
   serializeJson(doc, response);
@@ -206,6 +208,11 @@ void handleGetTestStatus(AsyncWebServerRequest *request) {
   doc["calibrationText"] = getCalibrationText(motorPerformanceVal);
   doc["speedOffsetType"] = useSpeedOffsetCurve ? "Curve" : "Global";
   doc["currentSpeedOffset"] = currentSpeedOffset;
+  doc["measuredSpeed"] = measuredSpeed;
+  doc["pidCorrection"] = pidCorrection;
+  doc["measuredFreqRawHz"] = measuredFreqRawHz;
+  doc["feedbackAvailable"] = feedbackAvailable;
+  doc["feedbackMissing"] = feedbackMissing;
 
   String response;
   serializeJson(doc, response);
@@ -213,13 +220,49 @@ void handleGetTestStatus(AsyncWebServerRequest *request) {
 }
 
 /**
- * GET /api/version - Return firmware and hardware version
+ * GET /api/calcurve - Return the active calibration curve (duty vs speed)
+ * Samples the live feed-forward mapping so the trace reflects both the
+ * built-in presets and a custom-built calibration.
  */
-void handleGetVersion(AsyncWebServerRequest *request) {
+void handleGetCalCurve(AsyncWebServerRequest *request) {
   JsonDocument doc;
-  doc["version"] = "2.00";
-  doc["hardware"] = "ESP32-C3";
-  doc["board"] = "LOLIN C3 Mini";
+  doc["pwmMax"]          = PWM_DUTY_MAX;
+  doc["maxSpeed"]        = maxSpeed;
+  doc["calibrationText"] = getCalibrationText(motorPerformanceVal);
+  doc["custom"]          = (motorPerformanceVal == CUSTOM_CAL_ID && customCalValid);
+
+  JsonArray speeds = doc["speed"].to<JsonArray>();
+  JsonArray duties = doc["duty"].to<JsonArray>();
+
+  uint16_t top = (maxSpeed < 10) ? 200 : maxSpeed;
+  uint16_t step = top / 80;
+  if (step < 1) step = 1;
+  for (uint16_t s = 0; s <= top; s += step) {
+    speeds.add(s);
+    duties.add((uint32_t)speedToPwmDuty(s));
+  }
+  if ((top % step) != 0) {          // always include the exact max-speed point
+    speeds.add(top);
+    duties.add((uint32_t)speedToPwmDuty(top));
+  }
+
+  // Anchor points for the ACTIVE cal: the real captured points for a custom cal,
+  // or reference marks sampled on the curve for a preset. Both lie on the curve.
+  JsonArray anchorSpeeds = doc["anchorSpeed"].to<JsonArray>();
+  JsonArray anchorDuties = doc["anchorDuty"].to<JsonArray>();
+  if (motorPerformanceVal == CUSTOM_CAL_ID && customCalValid) {
+    for (uint8_t i = 0; i < customCalCount; i++) {
+      anchorSpeeds.add(customCalPoints[i].speed);
+      anchorDuties.add(customCalPoints[i].duty);
+    }
+  } else {
+    for (uint16_t s = 20; s <= top; s += 20) {
+      uint32_t d = (uint32_t)speedToPwmDuty(s);
+      if (d == 0) continue;
+      anchorSpeeds.add(s);
+      anchorDuties.add(d);
+    }
+  }
 
   String response;
   serializeJson(doc, response);
@@ -261,7 +304,9 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     updateMotorPerformance = true;
     updateMotorArray();
   } else if (strcmp(key, "maxSpeed") == 0) {
-    maxSpeed = value.as<uint16_t>();
+    uint16_t v = value.as<uint16_t>();
+    if (v < 10) v = 10;  // never let the feedback freq-scale divisor collapse to ~0
+    maxSpeed = v;
   } else if (strcmp(key, "maxFreqHall") == 0) {
     maxFreqHall = value.as<uint16_t>();
   } else if (strcmp(key, "speedOffset") == 0) {
@@ -303,6 +348,22 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     if (newVal > 10) newVal = 10;
     averageFilter = newVal;
     resetMedianFilter();
+  } else if (strcmp(key, "reverseDirection") == 0) {
+    reverseDirection = value.as<bool>();
+    applyDirection();
+  } else if (strcmp(key, "feedbackEnable") == 0) {
+    feedbackEnable = value.as<bool>();
+    resetPid();
+  } else if (strcmp(key, "pidKp") == 0) {
+    pidKp = value.as<float>();
+  } else if (strcmp(key, "pidKi") == 0) {
+    pidKi = value.as<float>();
+  } else if (strcmp(key, "pidKd") == 0) {
+    pidKd = value.as<float>();
+  } else if (strcmp(key, "feedbackDeadband") == 0) {
+    feedbackDeadband = value.as<float>();
+  } else if (strcmp(key, "feedbackMinSpeed") == 0) {
+    feedbackMinSpeed = value.as<uint16_t>();
   } else {
     request->send(400, "application/json", "{\"error\":\"Unknown setting\"}");
     return;
@@ -314,7 +375,7 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     normaliseSpeedOffsetCurve();
   }
 
-  DEBUG_PRINTF("Setting %s = %s\n", key, value.as<String>().c_str());
+  DEBUG_WEB("set %s = %s", key, value.as<String>().c_str());
   request->send(200, "application/json", "{\"status\":\"ok\"}");
 }
 
@@ -347,12 +408,12 @@ void handlePostAction(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     testNeedleSweep = true;
   } else if (strcmp(action, "calPrevious") == 0) {
     if (tempDutyCycle == 0) {
-      tempDutyCycle = 385;
+      tempDutyCycle = PWM_DUTY_MAX;
     } else {
       tempDutyCycle = tempDutyCycle - 1;
     }
   } else if (strcmp(action, "calNext") == 0) {
-    if (tempDutyCycle >= 385) {
+    if (tempDutyCycle >= PWM_DUTY_MAX) {
       tempDutyCycle = 0;
     } else {
       tempDutyCycle = tempDutyCycle + 1;
@@ -362,6 +423,157 @@ void handlePostAction(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     return;
   }
 
-  DEBUG_PRINTF("Action executed: %s\n", action);
+  DEBUG_WEB("action executed: %s", action);
   request->send(200, "application/json", "{\"status\":\"ok\"}");
 }
+
+// ===========================================================================
+// SpeedPulserV2 custom calibration builder
+// ===========================================================================
+
+// Serialise the current calibration-builder state into a JsonDocument. Shared
+// by GET /api/cal and the POST responses so the UI always gets a fresh view.
+static void fillCalState(JsonDocument &doc) {
+  doc["name"]     = customCalName;
+  doc["unit"]     = customCalUnitMph ? "mph" : "kmh";
+  doc["convertToMPH"] = convertToMPH;   // lets the UI mirror an auto-enabled MPH cluster
+  doc["count"]    = customCalCount;
+  doc["valid"]    = customCalValid;
+  doc["selected"] = (motorPerformanceVal == CUSTOM_CAL_ID);
+  doc["duty"]     = tempDutyCycle;
+  doc["pwmMax"]   = PWM_DUTY_MAX;
+  doc["maxSpeed"] = maxSpeed;
+  doc["feedbackMaxFreq"] = feedbackMaxFreq;   // may have been auto-set on capture
+
+  JsonArray pts = doc["points"].to<JsonArray>();
+  for (uint8_t i = 0; i < customCalCount; i++) {
+    JsonObject p = pts.add<JsonObject>();
+    p["speed"] = customCalPoints[i].speed;
+    p["duty"]  = customCalPoints[i].duty;
+  }
+}
+
+/**
+ * GET /api/cal - Return the custom calibration builder state
+ */
+void handleGetCal(AsyncWebServerRequest *request) {
+  JsonDocument doc;
+  fillCalState(doc);
+  String response;
+  serializeJson(doc, response);
+  request->send(200, "application/json", response);
+}
+
+/**
+ * POST /api/cal - Custom calibration builder operations
+ * Expected JSON: { "op": "jog|setDuty|addPoint|deletePoint|clearPoints|
+ *                        setName|apply|save|export|import", ... }
+ */
+void handlePostCal(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+  if (index + len != total) {
+    return;  // Wait for complete payload
+  }
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, data, len);
+  if (error) {
+    request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  const char *op = doc["op"];
+  if (!op) {
+    request->send(400, "application/json", "{\"error\":\"Missing op\"}");
+    return;
+  }
+
+  if (strcmp(op, "jog") == 0) {
+    int32_t delta = doc["delta"] | 0;
+    int32_t range = (int32_t)PWM_DUTY_MAX + 1;
+    // Roll over: past max wraps to 0, below 0 wraps to max (easier initial cal).
+    int32_t next = ((int32_t)tempDutyCycle + delta) % range;
+    if (next < 0) next += range;
+    tempDutyCycle = (uint16_t)next;
+
+  } else if (strcmp(op, "setDuty") == 0) {
+    int32_t duty = doc["duty"] | 0;
+    if (duty < 0) duty = 0;
+    if (duty > (int32_t)PWM_DUTY_MAX) duty = PWM_DUTY_MAX;
+    tempDutyCycle = (uint16_t)duty;
+
+  } else if (strcmp(op, "addPoint") == 0) {
+    uint16_t speed = doc["speed"] | 0;
+    // Cal building is open-loop: capture the hand-jogged duty for this speed.
+    uint16_t duty  = doc["duty"].isNull() ? tempDutyCycle : doc["duty"].as<uint16_t>();
+    if (!calAddPoint(speed, duty)) {
+      request->send(409, "application/json", "{\"error\":\"Point list full\"}");
+      return;
+    }
+
+  } else if (strcmp(op, "deletePoint") == 0) {
+    uint8_t idx = doc["index"] | 0;
+    calDeletePoint(idx);
+
+  } else if (strcmp(op, "clearPoints") == 0) {
+    calClearPoints();
+
+  } else if (strcmp(op, "setName") == 0) {
+    const char *name = doc["name"];
+    if (name) calSetName(name);
+    customCalUnitMph = convertToMPH;  // capture current cluster unit as metadata
+
+  } else if (strcmp(op, "apply") == 0) {
+    buildCustomCalTable();
+    if (customCalValid) {
+      motorPerformanceVal = CUSTOM_CAL_ID;
+      updateMotorPerformance = true;
+    }
+
+  } else if (strcmp(op, "save") == 0) {
+    customCalUnitMph = convertToMPH;
+    calSaveToNvs();
+    buildCustomCalTable();
+    if (customCalValid) {
+      motorPerformanceVal = CUSTOM_CAL_ID;  // persisted by the periodic writeEEP
+      updateMotorPerformance = true;
+    }
+
+  } else if (strcmp(op, "export") == 0) {
+    JsonDocument out;
+    String json, carray;
+    calExportJson(json);
+    calExportCArray(carray);
+    out["json"]   = json;
+    out["carray"] = carray;
+    String response;
+    serializeJson(out, response);
+    request->send(200, "application/json", response);
+    return;
+
+  } else if (strcmp(op, "import") == 0) {
+    const char *json = doc["json"];
+    if (!json || !calImportJson(json)) {
+      request->send(400, "application/json", "{\"error\":\"Import failed\"}");
+      return;
+    }
+
+  } else {
+    request->send(400, "application/json", "{\"error\":\"Unknown op\"}");
+    return;
+  }
+
+  // A custom cal captured in MPH implies the cluster reads MPH; auto-enable the
+  // runtime "Cluster in MPH" conversion whenever such a cal is the active one.
+  if (motorPerformanceVal == CUSTOM_CAL_ID && customCalValid && customCalUnitMph) {
+    convertToMPH = true;
+  }
+
+  DEBUG_WEB("cal op: %s (count=%u duty=%u)", op, (unsigned)customCalCount, (unsigned)tempDutyCycle);
+
+  JsonDocument state;
+  fillCalState(state);
+  String response;
+  serializeJson(state, response);
+  request->send(200, "application/json", response);
+}
+

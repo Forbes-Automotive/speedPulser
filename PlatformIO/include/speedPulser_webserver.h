@@ -12,8 +12,12 @@ void handleGetSettings(AsyncWebServerRequest *request);
 void handleGetCalibrations(AsyncWebServerRequest *request);
 void handleGetStatus(AsyncWebServerRequest *request);
 void handleGetTestStatus(AsyncWebServerRequest *request);
-void handleGetVersion(AsyncWebServerRequest *request);
+void handleGetCalCurve(AsyncWebServerRequest *request);
 void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handlePostAction(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+
+// SpeedPulserV2 custom calibration builder
+void handleGetCal(AsyncWebServerRequest *request);
+void handlePostCal(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 
 #endif

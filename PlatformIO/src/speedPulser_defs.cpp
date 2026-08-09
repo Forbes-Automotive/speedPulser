@@ -32,12 +32,26 @@ bool convertToMPH = false;            // convert km/h input to mph before lookup
 bool useSpeedOffsetCurve = false;     // apply 5-point fixed-range offset curve instead of global offset
 int16_t speedOffsetCurveOffsets[SPEED_OFFSET_CURVE_POINTS] = {0, 0, 0, 0, 0};
 
+// ===== Motor Direction & Closed-Loop Feedback =====
+bool reverseDirection = false;        // false = normal (pinDirection LOW), true = reverse (HIGH)
+bool feedbackEnable = false;          // enable PID speed feedback trim using GPIO4
+float pidKp = 0.15f;                  // PID proportional gain
+float pidKi = 1.3f;                   // PID integral gain
+float pidKd = 0.0f;                   // PID derivative gain
+float feedbackDeadband = 1.5f;        // PID deadband (Hz); within this error P/D are silenced (integral still trims). 0 = off
+uint16_t feedbackMaxFreq = 254;       // measured motor motor Hz (not user-adjustable)
+uint16_t feedbackMinSpeed = 40;       // kph; targets below this run open-loop (motor can't sustain slower)
+uint16_t measuredSpeed = 0;           // measured motor speed from feedback (kph)
+int16_t pidCorrection = 0;            // current PID duty correction
+bool feedbackAvailable = false;       // true once a real tacho signal (GPIO4) has been seen this session
+bool feedbackMissing = false;         // true when the motor is running but no feedback signal is present (legacy PCB)
+
 // ===== Test Speed Variable =====
 uint16_t tempSpeed = 0;               // for testing only, set fixed speed in kmh
 
 // ===== Signal Filter =====
 uint8_t averageFilter = 6;            // number of samples for median filter (1-10)
 
-#if serialDebug
+#if enableDebug
 bool serialActive = false;  // set true in setup() if a USB Serial host is detected in time
 #endif

@@ -1,6 +1,6 @@
 /*
-  power_manager — universal ESP32 reduced-power module (implementation)
-  See power_manager.h for the full rationale and usage notes.
+  power_manager — universal ESP32 reduced-power module 
+  See power_manager.h for the full usage notes.
 
   ESP32-C3 / S2 compatibility
   ---------------------------
@@ -8,7 +8,6 @@
   memory-release mode for each chip family:
     - Original ESP32 (WROOM-32 / DevKit V1): 240 MHz, BTDM release.
     - ESP32-C3 (LOLIN C3 Mini etc.):         160 MHz, BLE-only release.
-    - ESP32-S2:                              160 MHz, no Bluetooth at all.
   All run-time behaviour (WiFi radio management, CPU scaling, FreeRTOS task)
   is identical across variants.
 */

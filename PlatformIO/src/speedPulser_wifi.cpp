@@ -8,10 +8,7 @@ void connectWifi()
 {
   WiFi.hostname(wifiHostName);
 
-#if serialDebugWifi
-  DEBUG_PRINTLN("Starting WiFi...");
-  DEBUG_PRINTLN("Creating access point...");
-#endif
+  DEBUG_WIFI("starting soft-AP...");
 
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
   WiFi.mode(WIFI_AP);
@@ -20,11 +17,7 @@ void connectWifi()
   WiFi.setSleep(false);               // Disable sleep for UI responsiveness
   WiFi.setTxPower(WIFI_POWER_8_5dBm); // Reduce TX power for stability on C3
 
-#if serialDebugWifi
-  DEBUG_PRINT("WiFi SSID: ");
-  DEBUG_PRINTLN(wifiHostName);
-  DEBUG_PRINTLN("IP Address: 192.168.1.1");
-#endif
+  DEBUG_WIFI("soft-AP up — SSID=%s  IP=192.168.1.1", wifiHostName);
 }
 
 /**
@@ -34,15 +27,11 @@ void connectWifi()
  */
 void disconnectWifi()
 {
-#if serialDebugWifi
-  DEBUG_PRINTF("Number of connections: %d\n", WiFi.softAPgetStationNum());
-#endif
+  DEBUG_WIFI("clients connected: %d", WiFi.softAPgetStationNum());
 
   if (WiFi.softAPgetStationNum() == 0)
   {
-#if serialDebugWifi
-    DEBUG_PRINTLN("No connections, turning off WiFi");
-#endif
+    DEBUG_WIFI("no clients — turning WiFi off");
 
     WiFi.disconnect(true, false);
     WiFi.mode(WIFI_OFF);
@@ -67,6 +56,7 @@ bool powerIsBusy()
 // ACTIVE -> REDUCED: close the web server cleanly before the radio drops.
 void powerOnEnterReduced()
 {
+  DEBUG_WIFI("entering reduced power — no clients, stopping web server + radio");
   server.end();
 }
 
@@ -75,6 +65,7 @@ void powerOnEnterReduced()
 // radio and the listener.
 void powerOnExitReduced()
 {
+  DEBUG_WIFI("exiting reduced power — restarting soft-AP + web server");
   connectWifi();
   server.begin();
 }

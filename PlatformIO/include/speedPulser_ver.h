@@ -1,6 +1,8 @@
 #ifndef SPEED_PULSER_VER_H
 #define SPEED_PULSER_VER_H
 
+#define VERSION "3.10"
+
 /*
 SpeedPulser - Forbes Automotive '25
 Analog speed converter suitable for mechanical drive speedometers. Tested on VW, Ford & Fiat clusters.
@@ -33,17 +35,45 @@ V2.10 - Changed to PWM LEDc support
 V2.20 - added Cluster in MPH
 V2.21 - fixed LEDC motor output for Arduino-ESP32 3.x: ledcWrite() is now pin-based and ignores channels created via ledc_channel_config(). Replaced all motor ledcWrite() calls with native ledc_set_duty()/ledc_update_duty() via setMotorDuty().
 
+V3.00 - PCB revision to include Motor Feedback + Reverse option and two Buck Converters (one for the motor, one for the ESP32). 
+      - closed-loop (PID) calibration + Calibration Builder (set duty, capture per-speed points, generate/apply/save, export/import).
+      - motor feedback frequency defined as a global (254 Hz) after bench measurement - other motors may need this changed.
+      - UI overhaul: Signal Filter + speed-offset curve moved to Configuration; Status Monitor shows measured speed, PID trim; cal mode auto-disables PID while active.
+
+V3.01 - added a live calibration-curve graph on the Dashboard (duty-vs-speed trace + captured points + marker for the point currently achieved from hall input, Speed Test or Calibration Mode).
+      - graph now scales to the duty range actually used, labels the axis and marker in raw duty (matching the Motor Duty gauge), and redraws when the calibration is changed.
+      - Calibration Builder duty change now rolls over and under so the final full-scale point is quick to reach.
+      - Export/Import simplified to plain text files; Export saves a .txt and Import opens a file picker directly (no manual pasting).
+
+V3.02 - smoother needle sweep: the sweep now ramps the DISPLAYED speed linearly over time and looks up its duty each 10 ms tick (mirrors the SpeedPulser Pro linearSpeedSweep) instead of a straight duty ramp, so the needle moves at a constant rate.
+      - Sweep Speed (ms) slider is now live: dragging it re-times an in-progress sweep on the fly (progress is integrated from the live rate each tick, so it retimes smoothly without jumping).
+
+V3.03 - fixed the live calibration-curve marker sitting off the curve: it now plots the mapped road speed (after offset/multiplier/MPH conversion) against the applied duty, instead of the raw hall input frequency. With feedback off the marker sits on the curve; with feedback on it reflects the PID-trimmed duty as intended.
+
+V3.04 - needle sweep now reaches full deflection again: it ramps to the active calibration's top achievable speed (so it drives to the cal's maximum duty), instead of the maxSpeed dial value which left the needle short whenever the dial was set below the calibration's top speed.
+
+V3.05 - needle sweep now drives the FULL 12-bit PWM range (0..PWM_DUTY_MAX) so the needle reaches its mechanical full deflection. The 10-bit presets only reach 384<<2 (~37% of range), which left the needle short on the 12-bit hardware; the sweep is a physical self-test to the peg, so it ramps the whole duty range rather than a calibration's top-speed duty.
+
+V3.06 - OTA + /api/version ported to the shared `ota_manager` module (same one used by SpeedPulser Pro): identical endpoints/behaviour, but the post-flash reboot now runs from a short FreeRTOS task instead of a blocking delay() in the request handler, so the async web server can flush the success response before the device restarts.
+
+V3.07 - custom calibrations now remember the cluster unit they were captured in (metadata already stored as "mph"/"kmh"), and the device auto-enables "Cluster in MPH" whenever an MPH cal becomes the active calibration (boot, dropdown selection, apply/save/import). The web UI mirrors the change: /api/cal now returns convertToMPH so the checkbox and speed-unit labels update automatically.
+
+V3.08 - added a "Cluster in MPH" toggle directly on the Calibration Builder page so the capture unit is set/seen where it matters. It stays in lock-step with the Configuration page toggle (either one drives the device setting and both, plus the capture unit label, update together).
+
+V3.09 - motor feedback pin is now monitored for availability: legacy PCBs without the feedback trace are detected automatically. Measured Speed / PID Trim stay "--" until a real tacho signal is seen (never forced to 0 on boot), show "N/A" if the motor runs with no feedback present, and the PID closed loop only engages once feedback is actually available (so enabling it on a board without feedback safely stays open-loop).
+      - fixed vehicle hall input not being ignored during Speed Test / Calibration: incoming pulses are now dropped at the interrupt while a test or cal is active, so the motor is driven solely by the test controls until the test is turned off.
+
+V3.10 - tightened closed-loop accuracy: the PID deadband no longer freezes the integrator, so the loop trims out the last couple of Hz and settles on the target instead of sitting ~2 km/h off. Inside the deadband only P and D are silenced for anti-hunt; the integral keeps nulling the steady-state error.
+      - added a user-configurable "PID Deadband (Hz)" slider (0-5 Hz, persisted); 0 = always full PID.
+
 Notes:
 - Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor
 - Converts to PWM signal for a BLDC motor
 - Motor voltage reduced via adjustable LM2596S on the PCB from 12v to ~9v
+      - *V2 changes this to two buck converters: one for the motor, one for the ESP32
 - Allows <10mph readings while supporting high (160mph) readings
 - Default support for 12v hall sensors from 02J / 02M etc: 1Hz = 1km/h
-- Uses 'ESP32_FastPWM' for easier PWM control compared to LEDc
 - Uses 'RunningMedian' for capturing multiple input pulses
-- ESP32 C3 is the primary target board (LOLIN C3)
 */
-
-#define VERSION "2.21"
 
 #endif  // SPEED_PULSER_VER_H

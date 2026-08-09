@@ -8,14 +8,14 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
-    <title>SpeedPulser</title>
+    <title>SpeedPulser V3</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
     <div class="container">
         <header>
-            <h1>SpeedPulser</h1>
+            <h1>SpeedPulser <span class="brand-badge">V3</span></h1>
             <div class="status-bar">
                 <span class="status-badge" id="calibrationStatus">Cal: --</span>
             </div>
@@ -42,7 +42,7 @@
                     <div class="gauge">
                         <div class="gauge-label" id="motorDutyLabel">Motor Duty</div>
                         <div class="gauge-value" id="motorDuty">--</div>
-                        <div class="gauge-unit">%</div>
+                        <div class="gauge-unit">duty</div>
                     </div>
                     <div class="gauge">
                         <div class="gauge-label">Speed Offset Type</div>
@@ -54,6 +54,26 @@
                         <div class="gauge-value" id="currentSpeedOffset">--</div>
                         <div class="gauge-unit" id="speedOffsetUnit">KMH</div>
                     </div>
+                    <div class="gauge">
+                        <div class="gauge-label">Measured Speed</div>
+                        <div class="gauge-value" id="measuredSpeed">--</div>
+                        <div class="gauge-unit" id="measuredSpeedUnit">KMH</div>
+                    </div>
+                    <div class="gauge">
+                        <div class="gauge-label">PID Trim</div>
+                        <div class="gauge-value" id="pidCorrection">--</div>
+                        <div class="gauge-unit">duty</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Calibration Curve</h2>
+                <div class="cal-graph-wrap">
+                    <canvas id="calCurveCanvas" class="cal-graph"></canvas>
+                </div>
+                <div class="cal-graph-legend">
+                    <span class="legend-item"><span class="legend-swatch point"></span>Current Duty/Speed</span>
                 </div>
             </section>
         </div>
@@ -61,7 +81,17 @@
         <!-- CONFIGURATION PAGE -->
         <div class="page" id="configuration-page">
             <section class="card centered-card">
-                <h2>Needle Sweep Configuration</h2>
+                <h2>Calibration</h2>
+                <div class="input-group">
+                    <label>Select Calibration</label>
+                    <select id="motorCalSelection">
+                        <option value="1">Loading calibrations...</option>
+                    </select>
+                </div>
+            </section>
+
+            <section class="card centered-card">
+                <h2>Needle Sweep</h2>
                 <div class="form-group">
                     <label>
                         <input type="checkbox" id="hasNeedleSweep">
@@ -81,21 +111,11 @@
             </section>
 
             <section class="card centered-card">
-                <h2>Calibration Selection</h2>
-                <div class="input-group">
-                    <label>Select Calibration</label>
-                    <select id="motorCalSelection">
-                        <option value="1">Loading calibrations...</option>
-                    </select>
-                </div>
-            </section>
-
-            <section class="card centered-card">
                 <h2>Speed Limits</h2>
                 <div class="input-group">
                     <label>Maximum Speed (km/h)</label>
                     <div class="slider-display">
-                        <input type="range" id="maxSpeed" min="0" max="400" step="5" value="200">
+                        <input type="range" id="maxSpeed" min="20" max="400" step="5" value="200">
                         <span id="maxSpeed-display">200</span>
                     </div>
                 </div>
@@ -106,6 +126,9 @@
                         <span id="maxFreqHall-display">200</span>
                     </div>
                 </div>
+                <div class="info-box" style="margin-top:1rem;">
+                    <p>For calibrating speed against hall sensor pulses — typically 1&nbsp;Hz = 1&nbsp;km/h.</p>
+                </div>
                 <div class="button-group">
                     <button class="btn-secondary" id="resetSpeedLimits">Reset Speed Limits</button>
                 </div>
@@ -115,17 +138,68 @@
                 <h2>Speed Offset</h2>
                 <div class="form-group">
                     <label>
-                        <input type="checkbox" id="speedOffsetPositive" checked>
-                        Positive Offset
+                        <input type="checkbox" id="useSpeedOffsetCurve">
+                        Speed-Dependent Offset Curve
                     </label>
                 </div>
-                <div class="input-group">
-                    <label>Speed Offset Value</label>
-                    <div class="slider-display">
-                        <input type="range" id="speedOffset" min="0" max="50" value="0">
-                        <span id="speedOffset-display">0</span>
+
+                <div id="globalOffsetSection">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="speedOffsetPositive" checked>
+                            Positive Offset
+                        </label>
+                    </div>
+                    <div class="input-group">
+                        <label>Speed Offset Value</label>
+                        <div class="slider-display">
+                            <input type="range" id="speedOffset" min="0" max="50" value="0">
+                            <span id="speedOffset-display">0</span>
+                        </div>
                     </div>
                 </div>
+
+                <div id="offsetCurveSection" style="display:none;">
+                    <div class="input-group">
+                        <label>Point 1 (0–50 km/h)</label>
+                        <div class="slider-display">
+                            <input type="range" id="curveOffset0" min="-20" max="20" step="1" value="0">
+                            <span id="curveOffset0-display">0</span>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>Point 2 (51–100 km/h)</label>
+                        <div class="slider-display">
+                            <input type="range" id="curveOffset1" min="-20" max="20" step="1" value="0">
+                            <span id="curveOffset1-display">0</span>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>Point 3 (101–150 km/h)</label>
+                        <div class="slider-display">
+                            <input type="range" id="curveOffset2" min="-20" max="20" step="1" value="0">
+                            <span id="curveOffset2-display">0</span>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>Point 4 (151–200 km/h)</label>
+                        <div class="slider-display">
+                            <input type="range" id="curveOffset3" min="-20" max="20" step="1" value="0">
+                            <span id="curveOffset3-display">0</span>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>Point 5 (201+ km/h)</label>
+                        <div class="slider-display">
+                            <input type="range" id="curveOffset4" min="-20" max="20" step="1" value="0">
+                            <span id="curveOffset4-display">0</span>
+                        </div>
+                    </div>
+                    <div class="info-box" style="margin-top:1rem;">
+                        <p>One offset per fixed speed range — used instead of the global offset.</p>
+                    </div>
+                </div>
+
                 <div class="form-group">
                     <label>
                         <input type="checkbox" id="convertToMPH">
@@ -133,10 +207,7 @@
                     </label>
                 </div>
             </section>
-        </div>
 
-        <!-- ADVANCED PAGE -->
-        <div class="page" id="advanced-page">
             <section class="card centered-card">
                 <h2>Signal Filter</h2>
                 <div class="input-group">
@@ -145,6 +216,83 @@
                         <input type="range" id="averageFilter" min="1" max="10" value="6">
                         <span id="averageFilter-display">6</span>
                     </div>
+                </div>
+                <div class="info-box" style="margin-bottom:1rem;">
+                    <p>Smooths the incoming hall-sensor signal by taking the median of
+                       this many consecutive pulse readings before converting to speed.
+                       Higher values steady a noisy or jittery input but slow the
+                       response to real speed changes; lower values react faster.</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- ADVANCED PAGE -->
+        <div class="page" id="advanced-page">
+            <section class="card centered-card">
+                <h2>Motor Direction &amp; Feedback</h2>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="reverseDirection">
+                        Reverse Direction
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="feedbackEnable">
+                        Feedback Enable
+                    </label>
+                </div>
+                <div class="info-box" style="margin-bottom:1rem;">
+                    <p>When enabled, the measured motor speed is compared to the
+                       requested speed and the PWM duty is trimmed to match.</p>
+                </div>
+                <div class="input-group">
+                    <label>Min Feedback Speed (kph)</label>
+                    <div class="slider-display">
+                        <input type="range" id="feedbackMinSpeed" min="0" max="60" step="1" value="40">
+                        <span id="feedbackMinSpeed-display">40</span>
+                    </div>
+                </div>
+                <div class="info-box" style="margin-bottom:1rem;">
+                    <p>Below this speed the motor can't use PID so
+                        disable PID at slow speed to stop hunting.
+                       Set to 0 to always use PID Control.</p>
+                </div>
+                <div class="input-group">
+                    <label>PID Kp</label>
+                    <div class="slider-display">
+                        <input type="range" id="pidKp" min="0" max="5" step="0.05" value="0.15">
+                        <span id="pidKp-display">0.15</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>PID Ki</label>
+                    <div class="slider-display">
+                        <input type="range" id="pidKi" min="0" max="5" step="0.05" value="1.3">
+                        <span id="pidKi-display">1.3</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>PID Kd</label>
+                    <div class="slider-display">
+                        <input type="range" id="pidKd" min="0" max="5" step="0.05" value="0">
+                        <span id="pidKd-display">0</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>PID Deadband (Hz)</label>
+                    <div class="slider-display">
+                        <input type="range" id="feedbackDeadband" min="0" max="5" step="0.1" value="1.5">
+                        <span id="feedbackDeadband-display">1.5</span>
+                    </div>
+                </div>
+                <div class="info-box" style="margin-bottom:1rem;">
+                    <p>Within this many Hz of target the P/D terms are silenced to stop
+                       needle hunting; the integral still trims out the last error.
+                       Lower = tighter tracking, higher = calmer needle. 0 = always full PID.</p>
+                </div>
+                <div class="button-group">
+                    <button class="btn-secondary" id="resetPidDefaults">Reset PID Defaults</button>
                 </div>
             </section>
 
@@ -167,26 +315,24 @@
                         <div class="status-label">LED Counter</div>
                         <div class="status-value" id="ledCounter">--</div>
                     </div>
+                    <div class="status-item">
+                        <div class="status-label">Measured Speed</div>
+                        <div class="status-value" id="measuredSpeedAdv">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">PID Trim</div>
+                        <div class="status-value" id="pidCorrectionAdv">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Measured Freq (Hz)</div>
+                        <div class="status-value" id="measuredFreqRaw">--</div>
+                    </div>
                 </div>
             </section>
         </div>
 
         <!-- CALIBRATION PAGE -->
         <div class="page" id="calibration-page">
-            <section class="card centered-card">
-                <h2>Speed Offset Curve (5 Points)</h2>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="useSpeedOffsetCurve">
-                        Enable Speed-Dependent Offset Curve
-                    </label>
-                </div>
-                <div class="info-box" style="margin-bottom:1rem;">
-                    <p>Set one offset for each fixed speed range.</p>
-                    <p>When enabled, this curve is used instead of the global speed offset.</p>
-                </div>
-            </section>
-
             <section class="card centered-card">
                 <h2>Speed Test Mode</h2>
                 <div class="form-group">
@@ -198,89 +344,89 @@
                 <div class="input-group">
                     <label>Test Speed Value</label>
                     <div class="slider-display">
-                        <input type="range" id="tempSpeed" min="0" max="400" value="0">
+                        <input type="range" id="tempSpeed" min="0" max="400" step="5" value="0">
                         <span id="tempSpeed-display">0</span>
                     </div>
                 </div>
             </section>
 
-            <section class="card centered-card">
-                <h2>Point 1 (0-50 km/h)</h2>
-                <div class="input-group">
-                    <label>Offset</label>
-                    <div class="slider-display">
-                        <input type="range" id="curveOffset0" min="-20" max="20" step="1" value="0">
-                        <span id="curveOffset0-display">0</span>
-                    </div>
+            <section class="card centered-card" id="calBuilderCard">
+                <h2>Calibration Builder</h2>
+                <div class="info-box" style="margin-bottom:1rem;">
+                    <p>Enable Calibration Mode, go to Max Duty and adjust potentiometer to achieve Max Cluster Speed.
+                        Then go through each duty until the needle sits exactly on a speed mark, 
+                        choose that speed in the list below, then click 'Capture'.</p>
+                    <p>Repeat for each major speed. When done, click 'Generate &amp; Apply', then 'Save'.</p>
                 </div>
-            </section>
 
-            <section class="card centered-card">
-                <h2>Point 2 (51-100 km/h)</h2>
-                <div class="input-group">
-                    <label>Offset</label>
-                    <div class="slider-display">
-                        <input type="range" id="curveOffset1" min="-20" max="20" step="1" value="0">
-                        <span id="curveOffset1-display">0</span>
-                    </div>
-                </div>
-            </section>
-
-            <section class="card centered-card">
-                <h2>Point 3 (101-150 km/h)</h2>
-                <div class="input-group">
-                    <label>Offset</label>
-                    <div class="slider-display">
-                        <input type="range" id="curveOffset2" min="-20" max="20" step="1" value="0">
-                        <span id="curveOffset2-display">0</span>
-                    </div>
-                </div>
-            </section>
-
-            <section class="card centered-card">
-                <h2>Point 4 (151-200 km/h)</h2>
-                <div class="input-group">
-                    <label>Offset</label>
-                    <div class="slider-display">
-                        <input type="range" id="curveOffset3" min="-20" max="20" step="1" value="0">
-                        <span id="curveOffset3-display">0</span>
-                    </div>
-                </div>
-            </section>
-
-            <section class="card centered-card">
-                <h2>Point 5 (201+ km/h)</h2>
-                <div class="input-group">
-                    <label>Offset</label>
-                    <div class="slider-display">
-                        <input type="range" id="curveOffset4" min="-20" max="20" step="1" value="0">
-                        <span id="curveOffset4-display">0</span>
-                    </div>
-                </div>
-            </section>
-
-            <section class="card centered-card">
-                <h2>Calibration Mode</h2>
                 <div class="form-group">
                     <label>
                         <input type="checkbox" id="testCal">
                         Enable Calibration Mode
                     </label>
                 </div>
-                <div class="calibration-controls">
-                    <p>Current Duty Cycle: <strong id="calibrationDuty">0 / 385</strong></p>
-                    <div class="button-group">
-                        <button class="btn-primary" id="calPrevious">← Previous</button>
-                        <button class="btn-primary" id="calNext">Next →</button>
-                    </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="calConvertToMPH">
+                        Cluster in MPH
+                    </label>
+                </div>
+
+                <div class="cal-duty-readout">
+                    <div class="cal-duty-value"><span id="calDutyNow">0</span> <small>/ 4095</small></div>
+                    <div class="cal-duty-sub"><span id="calDutyPct">0.0</span>% duty</div>
+                </div>
+
+                <div class="stepper-row">
+                    <button class="stepper-btn coarse" data-jog="-50">−50</button>
+                    <button class="stepper-btn" data-jog="-10">−10</button>
+                    <button class="stepper-btn fine" data-jog="-1">−1</button>
+                    <button class="stepper-btn fine" data-jog="1">+1</button>
+                    <button class="stepper-btn" data-jog="10">+10</button>
+                    <button class="stepper-btn coarse" data-jog="50">+50</button>
+                </div>
+
+                <div class="input-group" style="margin-top:1rem;">
+                    <label>Target speed for this point (<span id="calUnitLabel">km/h</span>)</label>
+                    <div class="chip-grid" id="calTargetChips"></div>
+                    <input type="number" id="calTargetSpeed" min="0" max="400" step="1" value="0"
+                           style="margin-top:0.75rem;">
+                </div>
+
+                <div class="button-group">
+                    <button class="btn-primary" id="calCaptureBtn">＋ Capture Point (<span id="calCaptureSpeed">0</span> @ <span id="calCaptureDuty">0</span>)</button>
+                </div>
+
+                <h3 class="cal-subhead">Captured Points</h3>
+                <div class="cal-points" id="calPointsList">
+                    <p class="hint">No points captured yet.</p>
+                </div>
+
+                <div class="input-group" style="margin-top:1rem;">
+                    <label>Calibration Name</label>
+                    <input type="text" id="calName" maxlength="39" placeholder="e.g. VW Bay VDO 90mph — Adam">
+                </div>
+
+                <div class="cal-action-grid">
+                    <button class="btn-primary" id="calApplyBtn">Generate &amp; Apply</button>
+                    <button class="btn-primary" id="calSaveBtn">Save to Device</button>
+                    <button class="btn-secondary" id="calClearBtn">Clear All</button>
                 </div>
             </section>
 
             <section class="card centered-card">
-                <h2>Calibration Data</h2>
-                <div class="info-box">
-                    <p>Use the Previous/Next buttons to step through duty cycles 0-385.</p>
-                    <p>Monitor the motor output and adjust your mechanical system accordingly.</p>
+                <h2>Export / Import</h2>
+                <div class="cal-action-grid">
+                    <button class="btn-primary" id="calExportTextBtn">Export Text</button>
+                    <button class="btn-secondary" id="calImportBtn">Import Text</button>
+                </div>
+                <input type="file" id="calImportFile" accept=".txt,text/plain" hidden>
+                <textarea id="calText" class="cal-textarea" rows="8" readonly
+                          placeholder="Exported / imported calibration text appears here."></textarea>
+                <div class="info-box" style="margin-top:1rem;">
+                    <p>Export Text saves the active calibration to a .txt file you can share or
+                       back up. Import Text opens a .txt file, shows it here, and applies it.</p>
                 </div>
             </section>
         </div>
@@ -297,10 +443,18 @@
                 </div>
             </section>
             <section class="card centered-card">
-                <h2>OTA Firmware</h2>
+                <h2>OTA Update</h2>
                 <div class="info-box" style="margin-bottom:1rem">
-                    <p>Select a compiled <strong>.bin</strong> firmware file then click <em>Upload Firmware</em>.</p>
-                    <p>The device will reboot automatically and apply the new firmware.</p>
+                    <p><strong>Firmware</strong> updates the application (compiled <strong>firmware.bin</strong>).</p>
+                    <p><strong>Filesystem</strong> updates the web interface (<strong>littlefs.bin</strong>).</p>
+                    <p>The device reboots automatically once the upload completes.</p>
+                </div>
+                <div class="input-group">
+                    <label>Update Type</label>
+                    <select id="otaType">
+                        <option value="firmware">Firmware (application)</option>
+                        <option value="filesystem">Filesystem (web UI)</option>
+                    </select>
                 </div>
                 <div class="ota-upload-area" id="otaDropZone">
                     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
