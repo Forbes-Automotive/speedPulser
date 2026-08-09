@@ -12,9 +12,13 @@ It is based on a **LOLIN C3 Mini (ESP32-C3)** and uses a **TY3816B** BLDC motor 
 
 | Feature | Detail |
 |---|---|
-| Speed input | 5 V / 12 V square-wave (hall sensor or Can2Cluster) |
-| Motor output | 10 kHz hardware PWM, 10-bit resolution |
+| Speed input | 5V / 12V square-wave (hall sensor or Can2Cluster) |
+| Motor output | 10 kHz hardware PWM, 12-bit resolution |
+| Closed-loop feedback | PID trims duty from the motor feedback pin (optional) |
 | Calibration profiles | 18 built-in (VW, Ford, Fiat, Merc, Smiths, Opel, VW Bay) |
+| Custom calibration | Calibration Builder — capture, generate, save, export/import |
+| Calibration Curve | Live duty-vs-speed curve with the current operating point on the Dashboard |
+| Status Monitor | Live measured speed, PID trim and actual motor speed (Hz) |
 | WiFi UI | Web app type interface |
 | Needle sweep | Configurable on power-up |
 | Speed offset | Global fixed offset **or** 5-point speed-dependent curve |
@@ -85,7 +89,7 @@ The three-pin **Input** connector on the bottom edge of the PCB accepts 12V batt
 
 > **Pull-up / Pull-down jumper:** Different hall sensors require either a pull-up or pull-down resistor. A 2-way jumper header on the PCB selects this. If the SpeedPulser is not registering incoming pulses, swap the jumper position. Sensors with an internal resistor can have the jumper removed entirely.
 
-An on-board adjustable **LM2596S** buck converter steps the 12 V supply down to approximately 9 V to power the motor, keeping the motor's operating range and torque within spec across the full speed scale.
+An on-board adjustable **LM2596S** buck converter steps the 12V supply down to approximately 9V to power the motor, keeping the motor's operating range and torque within spec across the full speed scale.
 
 ---
 
@@ -96,10 +100,10 @@ The five-pin **Motor** connector on the top edge of the PCB:
 | Pin | Signal | Notes |
 |-----|--------|-------|
 | 1 | Motor Power | Black — 5–9 V (set via on-board trimmer) |
-| 2 | Motor Feedback | Not used in current firmware |
-| 3 | Motor Direction | Green — pull to GND to reverse needle direction |
-| 4 | Motor Ground | White — motor ground return |
-| 5 | Motor PWM | 10 kHz PWM from ESP32 (via NPN level-shifter to 5 V) |
+| 2 | Motor Feedback | White — BLDC feedback pulse; read on GPIO 4 for closed-loop PID (optional) |
+| 3 | Motor Direction | Green — LOW (normal); enable Reverse to flip needle direction — HIGH (reversed) |
+| 4 | Motor Ground | White — motor ground |
+| 5 | Motor PWM | 10 kHz PWM from ESP32 (via NPN level-shifter to 4V) |
 
 ---
 
@@ -130,6 +134,8 @@ Once the motor is assembled, slide it over the OEM cluster shaft. Check:
 
 Take time here — good fitment minimises noise and extends coupler life.
 
+> Couplers are 3D printed and every motor / housing / cluster pairing wears in slightly differently. Expect to revisit the on-board potentiometer once after a few hours of running so the top-end reading still hits full-scale cleanly.
+
 ---
 
 ## WiFi & Web Interface
@@ -145,11 +151,20 @@ Live read-outs updated automatically:
 | Field | Description |
 |---|---|
 | Incoming Speed | Speed value calculated from incoming hall-sensor pulses (km/h or mph) |
-| Motor Duty | 10-bit PWM duty cycle currently applied to the motor |
+| Motor Duty | PWM duty cycle currently applied to the motor |
+| Measured Speed | Speed derived from the motor fedback pin when feedback is enabled |
+| PID Trim | Duty correction the feedback loop is currently applying |
 | Speed Offset Type | Whether a *Global* or *Curve* offset is active |
 | Current Speed Offset | The offset value applied at the current speed |
 
+Below the read-outs is a **Calibration Curve** graph: a duty-vs-speed trace of the
+active calibration with its captured points, plus a marker showing the point
+currently being achieved — from the hall input, Speed Test Mode or Calibration Mode.
+
 While **Speed Test Mode** is active, these fields switch to show the chosen test speed and resulting motor duty instead.
+
+![Dashboard tab — live gauges and calibration curve graph](/Images/ui-dashboard.png)
+> The bright dot on the graph is the point currently being achieved — from the hall input, Speed Test Mode or Calibration Mode — plotted against the active calibration's duty/speed curve (green dots = captured/sampled anchor points).
 
 ### Configuration Tab
 
@@ -163,52 +178,87 @@ While **Speed Test Mode** is active, these fields switch to show the chosen test
 | Maximum Hall Frequency (Hz) | The input frequency that corresponds to Maximum Speed |
 | Speed Offset Value | Fixed offset added to or subtracted from all speed readings |
 | Positive Offset | Direction of the fixed offset (add or subtract) |
+| Speed-Dependent Offset Curve | Enable a 5-point curve offset in place of the global offset |
 | Cluster in MPH | Convert the km/h input signal to mph before looking up the motor duty |
+| Average Filter Samples | Median smoothing window (1–10) for the incoming signal; higher = steadier but slower |
+
+![Configuration tab — calibration selection, needle sweep, speed limits, speed offset and signal filter cards](/Images/ui-configuration.png)
 
 ### Advanced Tab
 
 | Setting | Description |
 |---|---|
-| Average Filter Samples | Number of samples collected before the median is applied (1–10); higher = smoother but slower response |
+| Reverse Direction | Drive the direction pin HIGH to flip the motor direction |
+| Feedback Enable | Turn the closed-loop PID duty trim on or off (**not available on legacy PCBs**) |
+| Min Feedback Speed (km/h) | Below this speed the loop runs open-loop (feed-forward only) to stop low-speed hunting; 0 = always closed-loop |
+| PID Kp / Ki / Kd | Feedback loop gains (defaults 0.15 / 1.3 / 0) |
+| Reset PID Defaults | Restore the tuned default gains |
 | Performance Array Value | Index of the active calibration array |
 | Incoming Pulses | Raw frequency value from the ISR |
 | Raw Count | Number of samples accumulated so far |
 | LED Counter | ISR pulse counter (also drives the onboard LED blink) |
 
+![Advanced tab — Reverse Direction, Feedback Enable, PID gains and the live Status Monitor](/Images/ui-advanced.png)
+> **Reverse Direction** drives GPIO 10 HIGH instead of LOW, flipping the rotation direction for clusters whose motor is mounted the opposite way round.
+> **Feedback Enable** turns the closed-loop PID trim on; the sliders below it tune the loop and **Reset PID Defaults** restores the tuned baseline (0.15 / 1.3 / 0). See [Closed-Loop Feedback (PID)](#closed-loop-feedback-pid) below for how it works.
+
 ### Calibration Tab
 
-Contains two sections:
+Contains the **Calibration Builder** and **Speed Test Mode**.
 
-**Speed Offset Curve (5 Points)**  
-Allows a different trim offset to be applied per speed band instead of a single global value. Bands are fixed at 0–50 / 50–100 / 100–150 / 150–200 / 200+ km/h, each accepting ±20 km/h. Enable the checkbox to activate the curve in place of the global offset.
+**Calibration Builder**  
+
+1. Tick **Enable Calibration Mode** — the motor now follows the big duty read-out instead
+   of the speed source.
+2. Change the duty to the maximum value (**4096**).  Adjust the trimmer to achieve maximum cluster value.
+3. Change the duty with the **−50 / −10 / −1 / +1 / +10 / +50** buttons until the needle sits exactly on a speed mark.
+4. Pick that speed from the **Target speed** or type it in and press **Capture Point**. Each capture
+   is listed under *Captured Points* and can be removed individually.
+5. Repeat across the scale, name the calibration, then **Generate & Apply** to preview it
+   live and **Save to Device** to store it. **Export / Import** shares it as a text block.
 
 **Speed Test Mode**  
-Locks the motor to a user-chosen speed so the cluster can be observed on the bench without a vehicle signal. The chosen speed passes through the full offset and calibration pipeline, giving a realistic live preview. The dashboard updates in real time to show the chosen speed and the resulting motor duty.
+Locks the motor to a user-chosen speed so the cluster can be observed
+without a speed signal. The chosen speed passes through the full offset and
+calibration process, to give a realistic preview. With feedback enabled the closed
+loop drives to that speed; the dashboard updates in real time to show the chosen speed
+and the resulting motor duty.
+
+![Calibration tab — Speed Test Mode, the Calibration Builder with captured points, and Export/Import](/Images/ui-calibration.png)
+> Example above: five points captured (0, 40, 95, 150, 200 km/h) for a custom "VW Bay VDO 90mph" build, with the duty point sitting at 742/4095 (18.1%). Once at-least two points are captured, **Generate & Apply** interpolates the full curve and **Save to Device** remembers it — it then appears as the **★ Custom** entry in the Configuration tab's calibration list.
 
 ### OTA Tab
 
 Upload a new compiled `.bin` firmware file directly from the browser — no USB cable required. The device reboots automatically after a successful flash.
 
+![OTA tab — firmware info and drag-and-drop update uploader](/Images/ui-ota.png)
+
 ---
 
-## Power Management
+## Closed-Loop Feedback (PID)
 
-The firmware includes a **universal reduced-power codeblock** (`power_manager` - used in SpeedPulser Pro, Can2Cluster and other projects) that activates automatically 1 minute after the last WiFi client disconnects. This cuts current through the on-board linear regulator, directly reducing its heat output — important for long ignition-on times.
+With **Feedback Enable** on (Advanced tab), the firmware measures the BLDC motor's feedback
+pulses and trims the PWM duty so the needle holds its reading under load or voltage sag —
+rather than relying on the open-loop calibration alone.
 
-**What changes when idle:**
+**How It Works**
 
-| Action | Saving |
-|---|---|
-| WiFi radio off | ~80–120 mA average (single biggest saving) |
-| CPU: 160 MHz → 80 MHz | Moderate reduction in active current |
-| Bluetooth controller released at boot | ~60 KB RAM freed; small idle current saving |
-| WiFi modem-sleep while clients are connected | Minor saving without losing connectivity |
-| Reduced WiFi TX power | Adequate for in-car range; further small saving |
+- The feedback pulse on GPIO4 is counted and converted to a frequency (Hz), then
+  smoothed with an exponential moving average.
+- The requested speed is converted to a target frequency using a fixed full-scale
+  reference (**254 Hz at maximum speed**, measured on the bench and defined into the
+  firmware) so the loop needs no per-user frequency calibration.
+- A PID controller calculates a duty correction that is added to the feed-forward
+  calibration duty. A small dead-band with integral hold prevents needle shudder around
+  the target.
+- Below **Min Feedback Speed** the loop reverts to open-loop feed-forward to avoid
+  low-speed hunting where the motor can't run smoothly.
 
-**Waking back up:**  
-As soon as a device reconnects to the WiFi AP, full power is restored automatically — the radio comes back up, the CPU returns to 160 MHz, and the web server resumes. A power-cycle (ignition off/on) will also restore WiFi.
-
-> The LOLIN C3 Mini's maximum CPU frequency is 160 MHz; the power manager auto-detects this at compile time and adjusts accordingly.
+**Tuning** — the default gains (Kp 0.15, Ki 1.3, Kd 0) suit the supplied motor and
+cluster combination; the integral term carries most of the correction. Adjust from the
+Advanced tab if needed, and use **Reset PID Defaults** to return to the tuned values.
+The Status Monitor shows the live measured speed, the PID trim being applied and the raw
+tacho frequency so you can see the loop working.
 
 ---
 
@@ -257,24 +307,7 @@ Hall sensor pulse
 
 > **Default hall-sensor scaling:** 1 Hz = 1 km/h. This matches 02J / 02M gearbox sensors used in most VW/Audi applications. Adjust `maxFreqHall` and `maxSpeed` together if your sensor has a different ratio (e.g. set both to 160 for a sensor that outputs 160 Hz at 160 km/h).
 
-### How to Calibrate a New Cluster (Step by Step)
-
-1. **Bench setup** — Power the SpeedPulser from 12 V. Fit the motor to the cluster.
-2. **Connect to WiFi** — Join the `SpeedPulser` AP and open `192.168.1.1`.
-4. On the **Calibration** tab, enable **Enable Calibration**.
-5. Press `-1` - this will roll the duty counter to the maximum.  Use the adjustable potentiometer to set the cluster to the maximum speed.
-6. Press `+1` - this will roll the duty counter back to zero.  
-7. Press `+1` and increase the duty one step at a time, noting the resulting speed.
-5. Build the 386-element array in `speedPulser_motorCal.cpp`:
-   - Each **index** is the km/h speed (0–385).
-   - Each **value** is the required duty recorded in step 6–7.
-   - Linearly interpolate between measured points for unmeasured indices.
-   - Leave leading entries as `0` until the motor reliably starts turning.
-6. Add the array to `calibrationProfiles[]` with a descriptive name and rebuild.
-7. Flash and verify the full range on the cluster.
-8. **Please share the calibration** — open a pull request or post on Discord so others with the same cluster benefit.
-
-### Reading / Parsing a Calibration Array
+### Reading a Legacy Calibration Array
 
 To check what duty a profile produces at a given speed, index directly:
 
@@ -289,7 +322,7 @@ uint16_t duty = motorPerformance[80];
 
 ## Speed Offset
 
-Two offset modes are available and are configured from the **Configuration** and **Calibration** tabs respectively.
+Two offset modes are available and are both configured from the **Configuration** tab.
 
 **Global Offset** (default)  
 A single fixed value is added to or subtracted from every speed reading before the calibration lookup. Useful for correcting a systematic bias across the whole scale caused by motor preload or cluster wear.
@@ -305,7 +338,28 @@ Five independent offsets replace the global offset when enabled. This corrects c
 | 4 | 150 – 200 km/h |
 | 5 | 200+ km/h |
 
-Each point accepts ±20 km/h. Enable the *Speed-Dependent Offset Curve* checkbox on the Calibration tab to activate.
+Each point accepts ±20 km/h. Enable the *Speed-Dependent Offset Curve* checkbox on the Configuration tab to activate.
+
+---
+
+## Power Management
+
+The firmware includes a **universal reduced-power codeblock** (`power_manager` - used in SpeedPulser Pro, Can2Cluster and other projects) that activates automatically 1 minute after the last WiFi client disconnects. This cuts current through the on-board linear regulator, directly reducing its heat output — important for long ignition-on times.
+
+**What changes when idle:**
+
+| Action | Saving |
+|---|---|
+| WiFi radio off | ~80–120 mA average (single biggest saving) |
+| CPU: 160 MHz → 80 MHz | Moderate reduction in active current |
+| Bluetooth controller released at boot | ~60 KB RAM freed; small idle current saving |
+| WiFi modem-sleep while clients are connected | Minor saving without losing connectivity |
+| Reduced WiFi TX power | Adequate for in-car range; further small saving |
+
+**Waking back up:**  
+As soon as a device reconnects to the WiFi AP, full power is restored automatically — the radio comes back up, the CPU returns to 160 MHz, and the web server resumes. A power-cycle (ignition off/on) will also restore WiFi.
+
+> The LOLIN C3 Mini's maximum CPU frequency is 160 MHz; the power manager auto-detects this at compile time and adjusts accordingly.
 
 ---
 
@@ -327,18 +381,23 @@ New firmware can be flashed without removing the unit from the vehicle:
 
 | GPIO | Function |
 |---|---|
-| 2 | Motor PWM output (LEDC, stepped to 5 V via NPN transistor) |
+| 2 | Motor PWM output (LEDC 12-bit, stepped to 5 V via NPN transistor) |
+| 4 | Motor tacho feedback input (falling-edge interrupt counter; used by the PID loop) |
 | 5 | Speed pulse input (falling-edge interrupt) |
 | 8 | Onboard LED (blinks to confirm incoming pulses) |
-| 10 | Motor direction — reserved for future use |
+| 10 | Motor direction (LOW = normal, HIGH = reversed) |
 
 ### PWM Parameters
 
 | Parameter | Value |
 |---|---|
 | Frequency | 10 kHz |
-| Resolution | 10-bit (0–1023) |
+| Resolution | 12-bit (0–4095) |
 | Driver | Native ESP-IDF `ledc_set_duty` / `ledc_update_duty` |
+
+> Built-in calibration tables were captured at 10-bit and are scaled up to the 12-bit
+> hardware domain automatically; the Calibration Builder captures new points at full
+> 12-bit resolution.
 
 ### FreeRTOS Tasks
 
@@ -394,3 +453,8 @@ Platform: `pioarduino/platform-espressif32` (Arduino-ESP32 3.x / ESP-IDF 5.x)
 | V2.10 | LEDC hardware PWM; FreeRTOS tasks; new REST API tabbed web UI; power management module |
 | V2.20 | "Cluster in MPH" conversion option |
 | V2.21 | Fixed LEDC driver for Arduino-ESP32 3.x (`ledc_set_duty` / `ledc_update_duty`) |
+| V3.00 | PCB revision to include Motor Feedback + Reverse option and two Buck Converters (one for the motor, one for the ESP32) |
+| V3.01 | PID Calibration, Calibration Builder + Calibration Curve |
+| V3.02 | Smoother needle sweep | 
+| V3.0x | Various multiple tweaks |
+| V3.10 | Tighter PID control, feedback check for legacy PCBs etc |
