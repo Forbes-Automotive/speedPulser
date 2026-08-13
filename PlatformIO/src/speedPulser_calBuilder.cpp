@@ -238,10 +238,13 @@ void calExportCArray(String &out) {
   // Build the 385-entry table from the current speed points first.
   buildCustomCalTable();
 
+  // Number the array after the last built-in preset so it drops straight in.
+  String arr = "motorPerformance" + String((unsigned)getCalibrationCount() + 1);
+
   out  = "// ";
   out += customCalName;
   out += customCalUnitMph ? " - array in mph\n" : " - array in kmh\n";
-  out += "uint16_t motorPerformance18[] PROGMEM = {";
+  out += "uint16_t " + arr + "[] PROGMEM = {";
   for (uint16_t i = 0; i < 385; i++) {
     if (i) out += ", ";
     out += String(motorPerformance[i]);
@@ -249,7 +252,7 @@ void calExportCArray(String &out) {
   out += "};\n";
   out += "// add to calibrationProfiles[]:\n// {\"";
   out += customCalName;
-  out += "\", motorPerformance18},";
+  out += "\", " + arr + "},";
 }
 
 bool calImportJson(const char *json) {

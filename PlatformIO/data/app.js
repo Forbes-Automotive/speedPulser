@@ -637,6 +637,16 @@ function initCalBuilder() {
     showNotification('Exported to text file');
   }));
 
+  bindCal('calExportCBtn', () => calPost({ op: 'export' }).then((r) => {
+    const text = r.carray || '';
+    document.getElementById('calText').value = text;
+    const nameEl = document.getElementById('calName');
+    const base = (nameEl && nameEl.value.trim()) || 'calibration';
+    const fname = base.replace(/[^a-z0-9._-]+/gi, '_') + '_carray.txt';
+    downloadTextFile(fname, text);
+    showNotification('Exported firmware C-Array preset');
+  }));
+
   bindCal('calImportBtn', () => {
     // Always let the user pick a text file to load, display and import.
     const fileEl = document.getElementById('calImportFile');

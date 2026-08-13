@@ -1,7 +1,7 @@
 #ifndef SPEED_PULSER_VER_H
 #define SPEED_PULSER_VER_H
 
-#define VERSION "3.10"
+#define VERSION "3.11"
 
 /*
 SpeedPulser - Forbes Automotive '25
@@ -65,6 +65,7 @@ V3.09 - motor feedback pin is now monitored for availability: legacy PCBs withou
 
 V3.10 - tightened closed-loop accuracy: the PID deadband no longer freezes the integrator, so the loop trims out the last couple of Hz and settles on the target instead of sitting ~2 km/h off. Inside the deadband only P and D are silenced for anti-hunt; the integral keeps nulling the steady-state error.
       - added a user-configurable "PID Deadband (Hz)" slider (0-5 Hz, persisted); 0 = always full PID.
+      - added the "Export C-Array" button to the Calibration Builder: it downloads a paste-ready firmware preset (a motorPerformanceN[] table plus its calibrationProfiles[] line) so a calibration captured on a device can be built in as a permanent, selectable preset in new firmware. The array is auto-numbered after the last built-in preset so it drops straight in.
 
 Notes:
 - Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor

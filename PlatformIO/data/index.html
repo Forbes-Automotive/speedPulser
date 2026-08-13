@@ -419,6 +419,7 @@
                 <h2>Export / Import</h2>
                 <div class="cal-action-grid">
                     <button class="btn-primary" id="calExportTextBtn">Export Text</button>
+                    <button class="btn-secondary" id="calExportCBtn">Export C-Array</button>
                     <button class="btn-secondary" id="calImportBtn">Import Text</button>
                 </div>
                 <input type="file" id="calImportFile" accept=".txt,text/plain" hidden>
@@ -427,6 +428,10 @@
                 <div class="info-box" style="margin-top:1rem;">
                     <p>Export Text saves the active calibration to a .txt file you can share or
                        back up. Import Text opens a .txt file, shows it here, and applies it.</p>
+                    <p>Export C-Array saves a paste-ready firmware preset (a
+                       <code>motorPerformanceN[]</code> table plus its
+                       <code>calibrationProfiles[]</code> line, auto-numbered after the last
+                       built-in preset) for building it in as a permanent calibration.</p>
                 </div>
             </section>
         </div>
