@@ -543,12 +543,27 @@ void speedControlTask(void *parameter)
     // Normal operation: convert incoming pulses to motor speed
     if (!testSpeedo && !testCal)
     {
-      if (dutyCycle != dutyCycleIncoming)
-      { // only update PWM if speed changed
+      // Sample once per received hall pulse (tracked by the ISR tick stamp), not
+      // only when the frequency value changes: a rock-steady input never changed
+      // the reading, so the median never refilled and the incoming speed could sit
+      // frozen/blank while the motor still ran.
+      static TickType_t lastSampledPulse = 0;
+      if (lastPulse != lastSampledPulse)
+      {
+        lastSampledPulse = lastPulse;
         DEBUG_CTRL("in freq=%lu Hz", (unsigned long)dutyCycleIncoming);
 
-        // Map incoming frequency range to speed range
-        uint16_t mappedSpeed = map(dutyCycleIncoming, 0, maxFreqHall, 0, maxSpeed);
+        // Clamp the incoming frequency to the configured hall range before mapping
+        // (and guard maxFreqHall==0): an over-range signal or noise burst would
+        // otherwise map above maxSpeed and peg the motor at full scale.
+        uint16_t mappedSpeed = 0;
+        if (maxFreqHall > 0)
+        {
+          unsigned long hallFreq = dutyCycleIncoming;
+          if (hallFreq > maxFreqHall)
+            hallFreq = maxFreqHall;
+          mappedSpeed = (uint16_t)map(hallFreq, 0, maxFreqHall, 0, maxSpeed);
+        }
         DEBUG_CTRL("mapped speed=%u kph", mappedSpeed);
 
         // Collect samples for median filtering
@@ -585,7 +600,6 @@ void speedControlTask(void *parameter)
           samples.clear();
         }
       }
-      dutyCycle = dutyCycleIncoming;
 
       // Closed-loop trim: every 100 ms nudge the base duty so measured speed
       // (GPIO4 feedback) tracks the requested speed. Uses calibration as feed-forward.

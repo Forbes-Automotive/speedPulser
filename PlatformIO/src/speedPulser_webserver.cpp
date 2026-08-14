@@ -329,6 +329,12 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     speedOffsetCurveOffsets[4] = value.as<int16_t>();
   } else if (strcmp(key, "testSpeedo") == 0) {
     testSpeedo = value.as<bool>();
+    // Lock out the vehicle hall input: drop any reading so a stray/previous
+    // incoming signal can't linger on the display or drive the motor while the
+    // test is active (the ISR already ignores new pulses in test/cal mode).
+    dutyCycleIncoming = 0;
+    requestedSpeed = 0;
+    resetMedianFilter();
     if (!testSpeedo) {
       tempSpeed = 0;
       dutyCycle = 0;
@@ -342,6 +348,15 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     }
   } else if (strcmp(key, "testCal") == 0) {
     testCal = value.as<bool>();
+    // Same hall lockout for calibration mode.
+    dutyCycleIncoming = 0;
+    requestedSpeed = 0;
+    resetMedianFilter();
+    if (!testCal) {
+      dutyCycle = 0;
+      appliedDutyCycle = 0;
+      setMotorDuty(0);
+    }
   } else if (strcmp(key, "averageFilter") == 0) {
     uint8_t newVal = value.as<uint8_t>();
     if (newVal < 1) newVal = 1;
