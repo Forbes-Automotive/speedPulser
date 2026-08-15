@@ -81,6 +81,11 @@ uint16_t applyConfiguredSpeedOffset(uint16_t speedKph)
 }
 
 // ===== Interrupt Handler =====
+// File-scope (not a function-local static): a function-local static with a
+// runtime initializer would emit a __cxa_guard_acquire on first use, which takes
+// a FreeRTOS mutex with a timeout — illegal in an ISR and asserts in queue.c.
+static volatile unsigned long incomingPreviousMicros = 0;
+
 // Interrupt routine for the incoming pulse from opto-isolator.
 // IRAM_ATTR is required: this fires from a GPIO interrupt and must be able to
 // run while the flash cache is disabled (e.g. during an EEPROM/LittleFS write).
@@ -93,15 +98,22 @@ void IRAM_ATTR incomingHz()
   if (testSpeedo || testCal)
     return;
 
-  static unsigned long previousMicros = micros();
   unsigned long presentMicros = micros();
+  unsigned long previousMicros = incomingPreviousMicros;
+
+  if (previousMicros == 0)
+  {
+    incomingPreviousMicros = presentMicros; // seed on the first pulse only
+    return;
+  }
+
   unsigned long revolutionTime = presentMicros - previousMicros;
 
   if (revolutionTime < 1000UL)
     return; // debounce, avoid divide by 0
 
   dutyCycleIncoming = (60000000UL / revolutionTime) / 60; // calculate frequency
-  previousMicros = presentMicros;
+  incomingPreviousMicros = presentMicros;
   lastPulse = xTaskGetTickCountFromISR(); // FreeRTOS-safe tick snapshot
   ledCounter++;                           // count for LED flashing
 }
