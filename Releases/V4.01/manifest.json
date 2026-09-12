@@ -1,6 +1,6 @@
 {
   "name": "SpeedPulser",
-  "version": "3.10",
+  "version": "4.01",
   "builds": [
     {
       "chipFamily": "ESP32-C3",
