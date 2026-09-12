@@ -57,6 +57,9 @@ void resetPid();                          // Reset PID accumulators
 int16_t applyFeedbackTrim(uint16_t targetSpeed, uint16_t baseDuty); // PID duty correction
 bool calibrateFeedbackMaxFreq(uint16_t actualSpeed); // one-point tacho-Hz<->speed calibration
 uint32_t speedToPwmDuty(uint16_t speedKph); // speed -> interpolated hardware PWM duty (finer than the cal grid)
+float updateMeasuredFreq();               // measure + publish motor tacho frequency (Hz)
+int16_t applyMidRangingControl(uint16_t targetSpeed); // V4 mid-ranging: PWM tracks RPM, voltage self-schedules
+void resetMidRanging();                   // clear mid-ranging PID + voltage-trim state
 void speedControlTask(void *parameter);   // FreeRTOS task for speed control
 
 // ===== LEDC PWM Configuration =====
@@ -64,6 +67,16 @@ void speedControlTask(void *parameter);   // FreeRTOS task for speed control
 #define LEDC_TIMER_MOTOR      LEDC_TIMER_0
 #define LEDC_MODE             LEDC_LOW_SPEED_MODE
 #define PWM_FREQUENCY         10000  // Hz
+
+// ===== V_ADJ "DAC" (buck voltage control, V4 board) =====
+// A separate LEDC timer/channel drives GPIO6 as a PWM->RC analogue setpoint into
+// the buck FB node. 20 kHz sits far above the FB injection RC corner (~160 Hz),
+// so the residual ripple on the motor rail is negligible.
+#define LEDC_CHANNEL_VADJ     LEDC_CHANNEL_1
+#define LEDC_TIMER_VADJ       LEDC_TIMER_1
+#define VADJ_PWM_FREQUENCY    20000  // Hz
+#define VADJ_RESOLUTION       10     // bits (0..1023) — smooth enough for an analogue voltage setpoint
+#define VADJ_DUTY_MAX         ((1u << VADJ_RESOLUTION) - 1)
 #define PWM_RESOLUTION        12     // bits (4096 levels) — raised from 10 for finer low-speed granularity.
                                      //   10 kHz * 2^12 = 40.96 MHz, within the 80 MHz LEDC clock (valid).
                                      //   13-bit would need 81.9 MHz at 10 kHz and FAILS to configure.

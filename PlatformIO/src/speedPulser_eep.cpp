@@ -1,4 +1,5 @@
 #include "speedPulser_defs.h"
+#include "speedPulser_voltage.h"
 
 void readEEP() {
   DEBUG_EEP("initialising...");
@@ -56,6 +57,16 @@ void readEEP() {
     pref.putFloat("pidKd", pidKd);
     pref.putFloat("fbDeadband", feedbackDeadband);
     pref.putUShort("fbMinSpd", feedbackMinSpeed);
+    pref.putUShort("fbMaxFreq", feedbackMaxFreq);
+    pref.putBool("vcEnable", voltageControlEnable);
+    pref.putFloat("vcPwmNom", vcPwmNominal);
+    pref.putFloat("vcPwmMin", vcPwmMin);
+    pref.putFloat("vcVMin", vcVoltMin);
+    pref.putFloat("vcVMax", vcVoltMax);
+    pref.putFloat("vcKv", vcVoltGain);
+    pref.putFloat("vcKp", vcKp);
+    pref.putFloat("vcKi", vcKi);
+    pref.putFloat("vcKd", vcKd);
   } else {
     hasNeedleSweep = pref.getBool("hasNeedleSweep", false);
     testSpeedo = pref.getBool("testSpeedo", false);
@@ -82,6 +93,16 @@ void readEEP() {
     pidKd = pref.getFloat("pidKd", 0.0f);
     feedbackDeadband = pref.getFloat("fbDeadband", 1.5f);
     feedbackMinSpeed = pref.getUShort("fbMinSpd", 40);
+    feedbackMaxFreq = pref.getUShort("fbMaxFreq", feedbackMaxFreq);
+    voltageControlEnable = pref.getBool("vcEnable", true);
+    vcPwmNominal = pref.getFloat("vcPwmNom", vcPwmNominal);
+    vcPwmMin = pref.getFloat("vcPwmMin", vcPwmMin);
+    vcVoltMin = pref.getFloat("vcVMin", vcVoltMin);
+    vcVoltMax = pref.getFloat("vcVMax", vcVoltMax);
+    vcVoltGain = pref.getFloat("vcKv", vcVoltGain);
+    vcKp = pref.getFloat("vcKp", vcKp);
+    vcKi = pref.getFloat("vcKi", vcKi);
+    vcKd = pref.getFloat("vcKd", vcKd);
   }
 
   normaliseSpeedOffsetCurve();
@@ -121,6 +142,16 @@ void writeEEP() {
   pref.putFloat("pidKd", pidKd);
   pref.putFloat("fbDeadband", feedbackDeadband);
   pref.putUShort("fbMinSpd", feedbackMinSpeed);
+  pref.putUShort("fbMaxFreq", feedbackMaxFreq);
+  pref.putBool("vcEnable", voltageControlEnable);
+  pref.putFloat("vcPwmNom", vcPwmNominal);
+  pref.putFloat("vcPwmMin", vcPwmMin);
+  pref.putFloat("vcVMin", vcVoltMin);
+  pref.putFloat("vcVMax", vcVoltMax);
+  pref.putFloat("vcKv", vcVoltGain);
+  pref.putFloat("vcKp", vcKp);
+  pref.putFloat("vcKi", vcKi);
+  pref.putFloat("vcKd", vcKd);
 
   DEBUG_EEP("saved: maxHz=%u maxSpd=%u offset=%u mph=%u calVal=%u | fbEn=%u fbMaxHz=%u Kp=%.2f Ki=%.2f Kd=%.2f",
             (unsigned)maxFreqHall, (unsigned)maxSpeed, (unsigned)speedOffset, (unsigned)convertToMPH,

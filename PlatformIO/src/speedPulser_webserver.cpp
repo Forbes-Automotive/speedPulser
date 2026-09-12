@@ -3,7 +3,9 @@
 #include "speedPulser_ver.h"
 #include "speedPulser_control.h"
 #include "speedPulser_calBuilder.h"
+#include "speedPulser_voltage.h"
 #include "ota_manager.h"
+#include "wifi_manager.h"
 
 extern AsyncWebServer server;
 
@@ -28,10 +30,8 @@ void setupWebServer() {
       DEBUG_WEB("LittleFS mounted but /index.html is missing");
     }
 
-    // Serve static files from filesystem image
-    server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
-    server.serveStatic("/app.js", LittleFS, "/app.js");
-    server.serveStatic("/style.css", LittleFS, "/style.css");
+    // Static files are served by wifiManagerAttachStatic() below (with
+    // firmware cache-busting), so no serveStatic here.
   } else {
     // Fallback root for diagnosing filesystem flashing issues.
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -76,13 +76,17 @@ void setupWebServer() {
     nullptr,                                  // no upload handler
     handlePostCal);                           // onBody callback
 
-  // OTA (firmware + LittleFS web UI) via the shared, project-agnostic module.
-  // Registers POST /api/ota-update?mode=firmware|filesystem and GET /api/version.
-  OtaInfo otaInfo;
-  otaInfo.version = VERSION;
-  otaInfo.hardware = "ESP32-C3";
-  otaInfo.board = "LOLIN C3 Mini";
-  otaBegin(server, otaInfo, (enableDebug && debugWeb));
+  // OTA (firmware + LittleFS web UI) via the common, project-agnostic module.
+  // Registers /api/ota, /api/ota/fs and /api/ota/info.
+  ota_config_t ocfg = otaDefaultConfig();
+  ocfg.fwVersion = VERSION;
+  otaManagerInit(&ocfg);
+  otaManagerAttach(server);
+
+  // Static web UI with firmware cache-busting (only when LittleFS mounted).
+  if (littleFsMounted) {
+    wifiManagerAttachStatic(server);
+  }
 
   // Start server
   server.begin();
@@ -121,6 +125,18 @@ void handleGetSettings(AsyncWebServerRequest *request) {
   doc["feedbackDeadband"] = feedbackDeadband;
   doc["feedbackMaxFreq"] = feedbackMaxFreq;
   doc["feedbackMinSpeed"] = feedbackMinSpeed;
+
+  // V4 buck voltage control
+  doc["boardHasVoltageControl"] = boardHasVoltageControl;
+  doc["voltageControlEnable"] = voltageControlEnable;
+  doc["vcPwmNominal"] = vcPwmNominal;
+  doc["vcPwmMin"] = vcPwmMin;
+  doc["vcVoltMin"] = vcVoltMin;
+  doc["vcVoltMax"] = vcVoltMax;
+  doc["vcVoltGain"] = vcVoltGain;
+  doc["vcKp"] = vcKp;
+  doc["vcKi"] = vcKi;
+  doc["vcKd"] = vcKd;
 
   // Test mode settings
   doc["testSpeedo"] = testSpeedo;
@@ -190,6 +206,14 @@ void handleGetStatus(AsyncWebServerRequest *request) {
   doc["feedbackAvailable"] = feedbackAvailable;
   doc["feedbackMissing"] = feedbackMissing;
 
+  // V4 buck voltage control (live)
+  doc["boardHasVoltageControl"] = boardHasVoltageControl;
+  doc["voltageControlEnable"] = voltageControlEnable;
+  doc["buckEnabled"] = buckEnabled;
+  doc["voltageCmd"] = lastVoltageCmd;   // 0..1 (1 = max motor volts)
+  doc["pwmFrac"] = lastPwmFrac;         // 0..1 throttle fraction
+  doc["tempVoltageCmd"] = tempVoltageCmd;
+
   String response;
   serializeJson(doc, response);
   request->send(200, "application/json", response);
@@ -213,6 +237,11 @@ void handleGetTestStatus(AsyncWebServerRequest *request) {
   doc["measuredFreqRawHz"] = measuredFreqRawHz;
   doc["feedbackAvailable"] = feedbackAvailable;
   doc["feedbackMissing"] = feedbackMissing;
+
+  doc["boardHasVoltageControl"] = boardHasVoltageControl;
+  doc["buckEnabled"] = buckEnabled;
+  doc["voltageCmd"] = lastVoltageCmd;
+  doc["pwmFrac"] = lastPwmFrac;
 
   String response;
   serializeJson(doc, response);
@@ -379,6 +408,35 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     feedbackDeadband = value.as<float>();
   } else if (strcmp(key, "feedbackMinSpeed") == 0) {
     feedbackMinSpeed = value.as<uint16_t>();
+  } else if (strcmp(key, "voltageControlEnable") == 0) {
+    voltageControlEnable = value.as<bool>();
+    resetMidRanging();
+    // On the V4 board the buck stays enabled either way; when voltage control is
+    // switched off, park the rail at full volts so the legacy PWM path behaves.
+    if (boardHasVoltageControl && !voltageControlEnable) {
+      setMotorVoltageCmd(vcVoltMax);
+    }
+  } else if (strcmp(key, "tempVoltageCmd") == 0) {
+    float v = value.as<float>();
+    if (v < 0.0f) v = 0.0f;
+    if (v > 1.0f) v = 1.0f;
+    tempVoltageCmd = v;   // applied live in calibration mode by the control task
+  } else if (strcmp(key, "vcPwmNominal") == 0) {
+    vcPwmNominal = constrain(value.as<float>(), 0.2f, 0.95f);
+  } else if (strcmp(key, "vcPwmMin") == 0) {
+    vcPwmMin = constrain(value.as<float>(), 0.0f, 0.9f);
+  } else if (strcmp(key, "vcVoltMin") == 0) {
+    vcVoltMin = constrain(value.as<float>(), 0.0f, 1.0f);
+  } else if (strcmp(key, "vcVoltMax") == 0) {
+    vcVoltMax = constrain(value.as<float>(), 0.0f, 1.0f);
+  } else if (strcmp(key, "vcVoltGain") == 0) {
+    vcVoltGain = value.as<float>();
+  } else if (strcmp(key, "vcKp") == 0) {
+    vcKp = value.as<float>();
+  } else if (strcmp(key, "vcKi") == 0) {
+    vcKi = value.as<float>();
+  } else if (strcmp(key, "vcKd") == 0) {
+    vcKd = value.as<float>();
   } else {
     request->send(400, "application/json", "{\"error\":\"Unknown setting\"}");
     return;
@@ -433,6 +491,16 @@ void handlePostAction(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     } else {
       tempDutyCycle = tempDutyCycle + 1;
     }
+  } else if (strcmp(action, "captureTopSpeed") == 0) {
+    // V4 one-point calibration: with the needle pegged at the top mark (maxSpeed),
+    // latch the measured motor RPM as feedbackMaxFreq. The linear gauge then scales
+    // every lower speed off this single point.
+    if (!calibrateFeedbackMaxFreq(maxSpeed)) {
+      request->send(409, "application/json",
+                    "{\"error\":\"No motor RPM measured — raise voltage/PWM until the motor spins\"}");
+      return;
+    }
+    DEBUG_WEB("captureTopSpeed: feedbackMaxFreq=%u Hz @ %u", feedbackMaxFreq, maxSpeed);
   } else {
     request->send(400, "application/json", "{\"error\":\"Unknown action\"}");
     return;

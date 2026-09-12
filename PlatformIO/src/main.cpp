@@ -4,6 +4,7 @@
 #include "speedPulser_control.h"
 #include "speedPulser_tasks.h"
 #include "speedPulser_calBuilder.h"
+#include "speedPulser_voltage.h"
 #include "power_manager.h"
 
 /*
@@ -30,6 +31,9 @@ void setup()
     pinMode(pinMotorOutput, OUTPUT);
     digitalWrite(pinMotorOutput, LOW);
 
+    // Sample the board-version strap (GPIO3) before anything else uses the pin.
+    detectBoardVersion();
+
 #if enableDebug
     Serial.begin(baudSerial);
     Serial.setTxTimeoutMs(10); // non-blocking TX: don't stall if no USB host is connected
@@ -52,6 +56,19 @@ void setup()
 
     basicInit();     // Initialize GPIO, LEDC PWM, interrupts
     setMotorDuty(0); // Motor off initially
+
+    // V4 board only: bring up the adjustable motor supply. The buck must be enabled
+    // for the motor to have any voltage, so enable it regardless of the control
+    // mode — starting at the minimum (safe) rail with the motor PWM already off.
+    initVoltageControl();
+    if (boardHasVoltageControl)
+    {
+        enableBuck();
+        if (!voltageControlEnable)
+        {
+            setMotorVoltageCmd(vcVoltMax); // legacy PWM behaviour: hold full motor volts
+        }
+    }
 
     connectWifi();    // Enable WiFi and start AP/Station
     setupWebServer(); // Setup API web server and serve web files

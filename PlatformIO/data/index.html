@@ -8,14 +8,14 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
-    <title>SpeedPulser V3</title>
-    <link rel="stylesheet" href="style.css">
+    <title>SpeedPulser V4</title>
+    <link rel="stylesheet" href="style.css?v=speedpulser-4.01">
 </head>
 
 <body>
     <div class="container">
-        <header>
-            <h1>SpeedPulser <span class="brand-badge">V3</span></h1>
+        <header class="topbar">
+            <h1>SpeedPulser <span class="brand-badge">V4</span></h1>
             <div class="status-bar">
                 <span class="status-badge" id="calibrationStatus">Cal: --</span>
             </div>
@@ -68,13 +68,19 @@
             </section>
 
             <section class="card">
-                <h2>Calibration Curve</h2>
+                <h2 id="dashChartTitle">Calibration Curve</h2>
                 <div class="cal-graph-wrap">
                     <canvas id="calCurveCanvas" class="cal-graph"></canvas>
                 </div>
-                <div class="cal-graph-legend">
+                <div class="cal-graph-legend" id="dashChartLegend">
                     <span class="legend-item"><span class="legend-swatch point"></span>Current Duty/Speed</span>
                 </div>
+            </section>
+
+            <section class="card">
+                <h2>Display Options</h2>
+                <p class="hint">Choose which readouts show as dial gauges instead of numbers. Saved in this browser.</p>
+                <div class="tile-opt-grid" id="gaugeCustomizer"></div>
             </section>
         </div>
 
@@ -296,6 +302,78 @@
                 </div>
             </section>
 
+            <section class="card centered-card" id="voltageControlCard" style="display:none;">
+                <h2>Voltage Control</h2>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="voltageControlEnable">
+                        Enable Closed-Loop Voltage Control
+                    </label>
+                </div>
+                <div class="info-box" style="margin-bottom:1rem;">
+                    <p>Mid-ranging control: a fast loop trims PWM duty to hit the target speed
+                       while a slow loop nudges the buck-converter voltage to keep the PWM near
+                       its nominal working point. Disable to fall back to fixed full-voltage PWM
+                       (legacy behaviour).</p>
+                </div>
+                <div class="input-group">
+                    <label>Nominal PWM</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcPwmNominal" min="0.2" max="0.95" step="0.01" value="0.70">
+                        <span id="vcPwmNominal-display">0.70</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Minimum PWM</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcPwmMin" min="0" max="0.9" step="0.01" value="0.15">
+                        <span id="vcPwmMin-display">0.15</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Minimum Voltage</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcVoltMin" min="0" max="1" step="0.01" value="0.15">
+                        <span id="vcVoltMin-display">0.15</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Maximum Voltage</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcVoltMax" min="0" max="1" step="0.01" value="1.00">
+                        <span id="vcVoltMax-display">1.00</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Voltage Trim Gain</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcVoltGain" min="0" max="2" step="0.05" value="0.50">
+                        <span id="vcVoltGain-display">0.50</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>PWM Loop Kp</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcKp" min="0" max="5" step="0.05" value="1.50">
+                        <span id="vcKp-display">1.50</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>PWM Loop Ki</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcKi" min="0" max="5" step="0.05" value="2.00">
+                        <span id="vcKi-display">2.00</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>PWM Loop Kd</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcKd" min="0" max="5" step="0.05" value="0.00">
+                        <span id="vcKd-display">0.00</span>
+                    </div>
+                </div>
+            </section>
+
             <section class="card centered-card">
                 <h2>Status Monitor</h2>
                 <div class="status-grid">
@@ -327,6 +405,18 @@
                         <div class="status-label">Measured Freq (Hz)</div>
                         <div class="status-value" id="measuredFreqRaw">--</div>
                     </div>
+                    <div class="status-item">
+                        <div class="status-label">Buck Enabled</div>
+                        <div class="status-value" id="buckEnabledVal">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Voltage Cmd</div>
+                        <div class="status-value" id="voltageCmdVal">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">PWM Fraction</div>
+                        <div class="status-value" id="pwmFracVal">--</div>
+                    </div>
                 </div>
             </section>
         </div>
@@ -347,6 +437,48 @@
                         <input type="range" id="tempSpeed" min="0" max="400" step="5" value="0">
                         <span id="tempSpeed-display">0</span>
                     </div>
+                </div>
+            </section>
+
+            <section class="card centered-card" id="voltageCalCard" style="display:none;">
+                <h2>Top Speed Calibration</h2>
+                <div class="info-box" style="margin-bottom:1rem;">
+                    <p>This board can lift the motor supply voltage as well as PWM. To set the
+                       top speed: tick <strong>Calibration Mode</strong>, then raise the
+                       <strong>Voltage Lift</strong> and/or <strong>PWM Duty</strong> until the
+                       needle sits exactly on your desired top-speed mark
+                       (Max Speed = <span id="vcMaxSpeedLabel">--</span>). Then press
+                       <strong>Capture Top Speed</strong>. Every lower speed then scales
+                       linearly from this single point.</p>
+                    <p>Set the low cut-off with <strong>Min Feedback Speed</strong> on the
+                       Advanced page.</p>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="vcTestCal">
+                        Enable Calibration Mode
+                    </label>
+                </div>
+
+                <div class="input-group">
+                    <label>Voltage Lift (%)</label>
+                    <div class="slider-display">
+                        <input type="range" id="tempVoltageCmd" min="0" max="100" step="1" value="0">
+                        <span id="tempVoltageCmd-display">0</span>
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label>PWM Duty</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcDuty" min="0" max="4095" step="5" value="0">
+                        <span id="vcDuty-display">0</span>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn-primary" id="captureTopSpeedBtn">Capture Top Speed</button>
                 </div>
             </section>
 
@@ -450,30 +582,32 @@
             <section class="card centered-card">
                 <h2>OTA Update</h2>
                 <div class="info-box" style="margin-bottom:1rem">
-                    <p><strong>Firmware</strong> updates the application (compiled <strong>firmware.bin</strong>).</p>
                     <p><strong>Filesystem</strong> updates the web interface (<strong>littlefs.bin</strong>).</p>
-                    <p>The device reboots automatically once the upload completes.</p>
+                    <p><strong>Firmware</strong> updates the application (compiled <strong>firmware.bin</strong>).</p>
+                    <p>Update the filesystem first, then the firmware. The device reboots automatically once the firmware upload completes.</p>
+                </div>
+                <div class="ota-steps" id="otaSteps">
+                    <div class="ota-step" data-step="filesystem"><span class="ota-step-num">1</span> Filesystem</div>
+                    <div class="ota-step" data-step="firmware"><span class="ota-step-num">2</span> Firmware</div>
                 </div>
                 <div class="input-group">
                     <label>Update Type</label>
                     <select id="otaType">
-                        <option value="firmware">Firmware (application)</option>
                         <option value="filesystem">Filesystem (web UI)</option>
+                        <option value="firmware">Firmware (application)</option>
                     </select>
                 </div>
-                <div class="ota-upload-area" id="otaDropZone">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    <p>Drag &amp; drop a <strong>.bin</strong> file here, or</p>
-                    <button class="btn-secondary" id="otaChooseBtn" type="button">Choose File</button>
-                    <p id="otaFileName" class="ota-file-name"></p>
-                    <input type="file" id="otaFile" accept=".bin" style="display:none">
+                <div class="input-group">
+                    <label>Binary (.bin)</label>
+                    <input type="file" id="otaFile" accept=".bin,application/octet-stream">
                 </div>
+                <p id="otaFileName" class="ota-file-name"></p>
                 <div class="ota-progress" id="otaProgressWrap" style="display:none">
                     <div class="ota-progress-bar" id="otaProgressBar"></div>
                     <div class="ota-progress-label" id="otaProgressLabel">0%</div>
                 </div>
                 <div class="button-group" style="margin-top:1rem">
-                    <button class="btn-primary" id="otaUploadBtn" disabled>Upload Firmware</button>
+                    <button class="btn-primary" id="otaUploadBtn" disabled>Upload</button>
                 </div>
                 <div class="ota-status" id="otaStatus"></div>
             </section>
@@ -481,7 +615,7 @@
 
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=speedpulser-4.01"></script>
 </body>
 
 </html>

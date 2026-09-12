@@ -1,21 +1,23 @@
 #include "speedPulser_defs.h"
+#include "speedPulser_ver.h"
 #include "power_manager.h"
+#include "wifi_manager.h"
+#include "ota_manager.h"
 
 /**
  * Connect to WiFi in Access Point mode
  */
 void connectWifi()
 {
-  WiFi.hostname(wifiHostName);
-
   DEBUG_WIFI("starting soft-AP...");
 
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
-  WiFi.mode(WIFI_AP);
-  WiFi.softAPConfig(IPAddress(192, 168, 1, 1), IPAddress(192, 168, 1, 1), IPAddress(255, 255, 255, 0));
-  WiFi.softAP(wifiHostName);
-  WiFi.setSleep(false);               // Disable sleep for UI responsiveness
-  WiFi.setTxPower(WIFI_POWER_8_5dBm); // Reduce TX power for stability on C3
+  // Common SoftAP + mDNS + LittleFS front-end (reachable at speedpulser.local).
+  wifimgr_config_t wcfg = wifiDefaultConfig();
+  wcfg.hostName  = wifiHostName;    // SoftAP SSID + hostname
+  wcfg.mdnsName  = "speedpulser";   // -> http://speedpulser.local
+  wcfg.fwVersion = VERSION;         // injected into index.html for cache-busting
+  wifiManagerInit(&wcfg);
+  WiFi.setTxPower(WIFI_POWER_8_5dBm); // reduce TX power for stability on C3
 
   DEBUG_WIFI("soft-AP up — SSID=%s  IP=192.168.1.1", wifiHostName);
 }
@@ -50,7 +52,7 @@ void disconnectWifi()
 
 bool powerIsBusy()
 {
-  return WiFi.softAPgetStationNum() > 0;
+  return WiFi.softAPgetStationNum() > 0 || otaInProgress();
 }
 
 // ACTIVE -> REDUCED: close the web server cleanly before the radio drops.
@@ -58,6 +60,7 @@ void powerOnEnterReduced()
 {
   DEBUG_WIFI("entering reduced power — no clients, stopping web server + radio");
   server.end();
+  wifiManagerStopAP();
 }
 
 // REDUCED -> ACTIVE: bring the AP and web server back. Routes are already
@@ -66,6 +69,6 @@ void powerOnEnterReduced()
 void powerOnExitReduced()
 {
   DEBUG_WIFI("exiting reduced power — restarting soft-AP + web server");
-  connectWifi();
+  wifiManagerStartAP();
   server.begin();
 }

@@ -1,7 +1,7 @@
 #ifndef SPEED_PULSER_VER_H
 #define SPEED_PULSER_VER_H
 
-#define VERSION "3.10"
+#define VERSION "4.01" // shared UI theme + common wifi/ota managers (speedpulser.local, /api/ota)
 
 /*
 SpeedPulser - Forbes Automotive '25
@@ -70,6 +70,17 @@ V3.10 - tightened closed-loop accuracy: the PID deadband no longer freezes the i
       - the incoming frequency is now clamped to the configured Maximum Hall Frequency before mapping (and a zero setting is guarded), so an over-range or noisy signal reads as full scale instead of pegging the motor beyond the top of the calibration.
       - Speed Test / Calibration mode now fully lock out the vehicle hall input: enabling either mode clears any pending incoming reading (on top of the interrupt already ignoring new pulses), so a live signal can't disturb the test or linger on the display.
 
+V4.00 - hardware voltage control (V4 PCB). The SAME firmware now runs on legacy and V4 boards: a 1k-to-GND strap on GPIO3 is read once at boot to auto-detect the V4 board (buck voltage control) vs a legacy PWM-only board, so old boards behave exactly as before.
+      - V4 adds an adjustable motor supply: GPIO6 (V_ADJ) is a PWM->RC "DAC" injected into the TPS62933 feedback node (INVERSE: higher V_ADJ = lower motor volts) and GPIO7 enables the buck (driven HIGH after a safe minimum rail is set at boot).
+      - closed-loop MID-RANGING control: because the gauge is linear (needle proportional to motor RPM), one top RPM point defines the whole scale. A fast PID drives the throttle PWM to hit target RPM while a slow integrator trims the buck voltage to keep the PWM near a nominal centre, so the voltage self-schedules to the motor's curve at every speed - no multi-point table.
+      - simple top-speed calibration on V4: in Calibration mode the user lifts VOLTAGE and/or PWM until the needle pegs the top mark, then captures the measured RPM (feedbackMaxFreq) as the single anchor; the low cut-off reuses the existing feedback-min-speed. The legacy multi-point Calibration Builder is retained for old boards.
+      - all voltage-control tuning (PWM nominal/min, voltage min/max, trim gain, inner PID gains) and the captured top-speed point persist in EEPROM.
+
+V4.01 - standardised Forbes Automotive UI theme (shared style.css);
+        adopted common wifi_manager (mDNS: can2rpm.local) and ota_manager
+        (firmware + filesystem OTA via /api/ota, /api/ota/fs); per-product
+        cache-busting on web assets
+        
 Notes:
 - Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor
 - Converts to PWM signal for a BLDC motor

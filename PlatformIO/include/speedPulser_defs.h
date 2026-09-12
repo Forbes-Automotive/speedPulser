@@ -193,6 +193,11 @@ extern uint16_t tempSpeed;
 #define pinFeedback 4    // motor speed feedback pulse input (interrupt counter; C3 has no PCNT)
 #define pinOnboardLED 8  // for feedback for input checking / flash LED on input.  ESP32 C3 is Pin 8
 
+// ===== V4 board — buck voltage control (auto-detected at boot) =====
+#define pinBoardVersion 3 // 1k to GND on the V4 board -> reads LOW = new board; legacy board floats HIGH (INPUT_PULLUP)
+#define pinVoltageAdjust 6 // V_ADJ: PWM "DAC" injected into the TPS62933 FB node (INVERSE: higher duty -> lower motor volts)
+#define pinBuckEnable 7    // buck EN: drive HIGH to enable the adjustable motor-supply buck (default LOW = off at boot)
+
 #define wifiHostName "SpeedPulser" // the WiFi name
 
 // Global variables - moved to respective modules

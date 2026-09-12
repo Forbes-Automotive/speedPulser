@@ -13,7 +13,10 @@ const TEMP_SPEED_PUSH_MS = 40;
 function initApp() {
   initNavigation();
   initControls();
+  initVoltageControls();
   initOta();
+  initCollapsibleCards();
+  initGaugeUI();
   initCalBuilder();
   fetchCalibrations().then(fetchSettings).then(refreshCalState).then(fetchCalCurve);  // options, settings, cal builder, curve
   startStatusPolling();
@@ -65,6 +68,7 @@ function updateDashboard(speedValue, dutyValue, isTestMode) {
     motorDutyEl.textContent = dutyRaw;
     incomingSpeedEl.classList.add('test-active');
     motorDutyEl.classList.add('test-active');
+    updateTileGauges();
     return;
   }
 
@@ -74,6 +78,7 @@ function updateDashboard(speedValue, dutyValue, isTestMode) {
   motorDutyEl.textContent = dutyRaw;
   incomingSpeedEl.classList.remove('test-active');
   motorDutyEl.classList.remove('test-active');
+  updateTileGauges();
 }
 
 function updateSpeedOffsetStatus(mode, offsetValue) {
@@ -331,6 +336,95 @@ function initControls() {
 }
 
 
+// ===== VOLTAGE CONTROL (V4 board) =====
+// Set a slider's value and its live "-display" span in one call.
+function setSlider(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = val;
+  updateSliderDisplay(id, val);
+}
+
+// Show the V4 voltage-control cards on new boards, and the legacy multi-point
+// Calibration Builder only on boards without voltage control.
+function applyBoardVisibility(isV4) {
+  const show = (id, on) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = on ? '' : 'none';
+  };
+  show('voltageCalCard', isV4);
+  show('voltageControlCard', isV4);
+  show('calBuilderCard', !isV4);
+  boardHasVc = isV4;
+  updateDashChartChrome(isV4);
+  scheduleCalDraw();
+}
+
+function initVoltageControls() {
+  // Tuning sliders / toggle that map 1:1 to firmware control keys.
+  const vcInputs = ['voltageControlEnable', 'vcPwmNominal', 'vcPwmMin', 'vcVoltMin',
+                    'vcVoltMax', 'vcVoltGain', 'vcKp', 'vcKi', 'vcKd'];
+  vcInputs.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      const value = el.type === 'checkbox' ? el.checked : el.value;
+      pushControl(id, value);
+    });
+    if (el.type === 'range') {
+      el.addEventListener('input', () => {
+        updateSliderDisplay(id, el.value);
+        pushControl(id, el.value);
+      });
+    }
+  });
+
+  // Voltage lift is shown as 0–100 % but the firmware wants a 0..1 fraction.
+  const voltEl = document.getElementById('tempVoltageCmd');
+  if (voltEl) {
+    voltEl.addEventListener('input', () => {
+      updateSliderDisplay('tempVoltageCmd', voltEl.value);
+      pushControl('tempVoltageCmd', (Number(voltEl.value) / 100).toFixed(3));
+    });
+  }
+
+  // PWM duty drives tempDutyCycle through the cal builder's setDuty op.
+  const dutyEl = document.getElementById('vcDuty');
+  if (dutyEl) {
+    dutyEl.addEventListener('input', () => {
+      updateSliderDisplay('vcDuty', dutyEl.value);
+      calPost({ op: 'setDuty', duty: Number(dutyEl.value) }).catch(() => {});
+    });
+  }
+
+  // V4 calibration-mode toggle mirrors the legacy testCal flag.
+  const vcCal = document.getElementById('vcTestCal');
+  if (vcCal) {
+    vcCal.addEventListener('change', () => pushControl('testCal', vcCal.checked));
+  }
+
+  const captureBtn = document.getElementById('captureTopSpeedBtn');
+  if (captureBtn) {
+    captureBtn.addEventListener('click', () => {
+      fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'captureTopSpeed' })
+      }).then(async (r) => {
+        if (r.ok) {
+          showNotification('Top speed captured');
+          fetchSettings();
+          fetchCalCurve();
+        } else {
+          const e = await r.json().catch(() => ({}));
+          showNotification(e.error || 'Capture failed — raise voltage/PWM', 'error');
+        }
+      }).catch(() => showNotification('Capture failed', 'error'));
+    });
+  }
+}
+
+
 function applySpeedUnitLabels(useMPH) {
   const label = useMPH ? 'MPH' : 'KMH';
   const ids = ['speedUnit', 'speedOffsetUnit', 'measuredSpeedUnit'];
@@ -415,9 +509,26 @@ async function fetchSettings() {
     document.getElementById('feedbackDeadband').value = data.feedbackDeadband ?? 1.5;
     document.getElementById('feedbackDeadband-display').textContent = data.feedbackDeadband ?? 1.5;
 
+    // Voltage control (V4 board only)
+    applyBoardVisibility(!!data.boardHasVoltageControl);
+    const vcEnableEl = document.getElementById('voltageControlEnable');
+    if (vcEnableEl) vcEnableEl.checked = data.voltageControlEnable !== false;
+    setSlider('vcPwmNominal', data.vcPwmNominal ?? 0.70);
+    setSlider('vcPwmMin', data.vcPwmMin ?? 0.15);
+    setSlider('vcVoltMin', data.vcVoltMin ?? 0.15);
+    setSlider('vcVoltMax', data.vcVoltMax ?? 1.00);
+    setSlider('vcVoltGain', data.vcVoltGain ?? 0.50);
+    setSlider('vcKp', data.vcKp ?? 1.50);
+    setSlider('vcKi', data.vcKi ?? 2.00);
+    setSlider('vcKd', data.vcKd ?? 0.00);
+    const vcMaxLabel = document.getElementById('vcMaxSpeedLabel');
+    if (vcMaxLabel) vcMaxLabel.textContent = data.maxSpeed ?? '--';
+    const vcCalEl = document.getElementById('vcTestCal');
+    if (vcCalEl) vcCalEl.checked = data.testCal || false;
+
     // Update firmware info on OTA page
     try {
-      const verResponse = await fetch('/api/version');
+      const verResponse = await fetch('/api/ota/info');
       const verData = await verResponse.json();
       document.getElementById('otaFwVersion').textContent = verData.version || '--';
       document.getElementById('otaHardware').textContent = verData.hardware || '--';
@@ -473,6 +584,25 @@ async function fetchStatus() {
     const freqEl = document.getElementById('measuredFreqRaw');
     if (freqEl && data.measuredFreqRawHz !== undefined) {
       freqEl.textContent = Number(data.measuredFreqRawHz).toFixed(1);
+    }
+
+    // Buck / voltage-control live readouts (V4 board)
+    if (data.boardHasVoltageControl !== undefined) {
+      const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+      setTxt('buckEnabledVal', data.buckEnabled ? 'Yes' : 'No');
+      setTxt('voltageCmdVal', data.voltageCmd !== undefined ? Number(data.voltageCmd).toFixed(2) : '--');
+      setTxt('pwmFracVal', data.pwmFrac !== undefined ? Number(data.pwmFrac).toFixed(2) : '--');
+
+      if (data.boardHasVoltageControl) {
+        const target = data.testSpeedo ? Number(data.tempSpeed) : Number(data.incomingSpeed);
+        pushVcSample({
+          target: Number.isFinite(target) ? target : null,
+          measured: data.feedbackAvailable ? Number(data.measuredSpeed) : null,
+          voltage: data.voltageCmd !== undefined ? Number(data.voltageCmd) * 100 : null,
+          pwm: data.pwmFrac !== undefined ? Number(data.pwmFrac) * 100 : null
+        });
+        scheduleCalDraw();
+      }
     }
 
     speedTestActive = !!data.testSpeedo;
@@ -865,6 +995,40 @@ let calCapturedPoints = [];       // [{speed, duty}] captured anchors from the b
 let calCurrentPoint = null;       // { duty, speed } live operating point
 let calDrawPending = false;
 
+// V4 boards repurpose the dashboard graph as a live control strip-chart.
+let boardHasVc = false;
+const VC_HISTORY_MAX = 180;       // rolling window of samples (~13 s @ 75 ms poll)
+let vcHistory = [];               // [{ target, measured, voltage, pwm }]
+const VC_COL = { target: '#00D9FF', measured: '#2EA043', voltage: '#FF6B35', pwm: '#A371F7' };
+
+function pushVcSample(s) {
+  vcHistory.push(s);
+  if (vcHistory.length > VC_HISTORY_MAX) vcHistory.shift();
+}
+
+function legendItem(color, label) {
+  return '<span class="legend-item"><span class="legend-swatch" style="background:' +
+         color + '"></span>' + label + '</span>';
+}
+
+// Swap the dashboard graph's title + legend between the legacy calibration curve
+// and the V4 live-control strip chart.
+function updateDashChartChrome(isV4) {
+  const title = document.getElementById('dashChartTitle');
+  if (title) title.textContent = isV4 ? 'Live Control' : 'Calibration Curve';
+  const legend = document.getElementById('dashChartLegend');
+  if (!legend) return;
+  if (isV4) {
+    legend.innerHTML =
+      legendItem(VC_COL.target, 'Target') +
+      legendItem(VC_COL.measured, 'Measured') +
+      legendItem(VC_COL.voltage, 'Voltage %') +
+      legendItem(VC_COL.pwm, 'PWM %');
+  } else {
+    legend.innerHTML = '<span class="legend-item"><span class="legend-swatch point"></span>Current Duty/Speed</span>';
+  }
+}
+
 async function fetchCalCurve() {
   try {
     const r = await fetch('/api/calcurve');
@@ -900,7 +1064,10 @@ function curveSpeedAt(duty) {
 function scheduleCalDraw() {
   if (calDrawPending) return;
   calDrawPending = true;
-  requestAnimationFrame(() => { calDrawPending = false; drawCalCurve(); });
+  requestAnimationFrame(() => {
+    calDrawPending = false;
+    if (boardHasVc) drawVoltageChart(); else drawCalCurve();
+  });
 }
 
 function drawCalCurve() {
@@ -1045,9 +1212,123 @@ function drawCalCurve() {
   }
 }
 
+// V4 live-control strip chart: rolling time-series of target/measured speed
+// (left axis, km/h) plus buck voltage and PWM throttle (right axis, %).
+function drawVoltageChart() {
+  const canvas = document.getElementById('calCurveCanvas');
+  if (!canvas || !canvas.clientWidth) return;   // not laid out yet (hidden tab)
+
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth;
+  const cssH = Math.round(cssW * 0.6);
+  canvas.style.height = cssH + 'px';
+  if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const style = getComputedStyle(document.documentElement);
+  const col = (name, fallback) => (style.getPropertyValue(name).trim() || fallback);
+  const border = col('--border', '#30363D');
+  const textDim = col('--text-dim', '#8B949E');
+
+  const padL = 40, padR = 40, padT = 12, padB = 22;
+  const plotW = cssW - padL - padR;
+  const plotH = cssH - padT - padB;
+
+  // Left axis: speed. Grow to fit the largest target/measured seen in the window.
+  let speedMax = (calCurveData && calCurveData.maxSpeed) || 200;
+  for (const s of vcHistory) {
+    if (s.target != null && s.target > speedMax) speedMax = s.target;
+    if (s.measured != null && s.measured > speedMax) speedMax = s.measured;
+  }
+  speedMax = Math.max(20, Math.ceil(speedMax / 20) * 20);
+
+  const n = VC_HISTORY_MAX;
+  const xOf = (i) => padL + (n <= 1 ? 0 : (i / (n - 1)) * plotW);
+  const ySpeed = (v) => padT + plotH - (Math.max(0, Math.min(v, speedMax)) / speedMax) * plotH;
+  const yPct = (v) => padT + plotH - (Math.max(0, Math.min(v, 100)) / 100) * plotH;
+
+  ctx.font = '10px -apple-system, "Segoe UI", Arial, sans-serif';
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 1;
+
+  // Horizontal grid with speed (left) and percent (right) labels.
+  const ySteps = 4;
+  for (let i = 0; i <= ySteps; i++) {
+    const y = padT + (plotH / ySteps) * i;
+    ctx.globalAlpha = 0.35;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(cssW - padR, y); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = textDim;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    ctx.fillText(String(Math.round(speedMax * (1 - i / ySteps))), padL - 6, y);
+    ctx.textAlign = 'left';
+    ctx.fillText(String(Math.round(100 * (1 - i / ySteps))) + '%', cssW - padR + 6, y);
+  }
+
+  // Axis titles
+  ctx.fillStyle = textDim;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('time \u2192', padL + plotW / 2, cssH);
+
+  if (!vcHistory.length) {
+    ctx.fillStyle = textDim;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Waiting for data\u2026', padL + plotW / 2, padT + plotH / 2);
+    return;
+  }
+
+  // Newest sample sits at the right edge; older samples trail off to the left.
+  const base = n - vcHistory.length;
+  const plotLine = (key, color, yMap, dashed) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = dashed ? 0.85 : 1;
+    if (dashed) ctx.setLineDash([4, 3]); else ctx.setLineDash([]);
+    ctx.beginPath();
+    let started = false;
+    for (let j = 0; j < vcHistory.length; j++) {
+      const v = vcHistory[j][key];
+      if (v == null || Number.isNaN(v)) { started = false; continue; }
+      const x = xOf(base + j);
+      const y = yMap(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  };
+
+  plotLine('voltage', VC_COL.voltage, yPct, false);
+  plotLine('pwm', VC_COL.pwm, yPct, false);
+  plotLine('target', VC_COL.target, ySpeed, true);
+  plotLine('measured', VC_COL.measured, ySpeed, false);
+
+  // Latest-value dots at the right edge.
+  const last = vcHistory[vcHistory.length - 1];
+  const dot = (v, color, yMap) => {
+    if (v == null || Number.isNaN(v)) return;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(xOf(n - 1), yMap(v), 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  dot(last.voltage, VC_COL.voltage, yPct);
+  dot(last.pwm, VC_COL.pwm, yPct);
+  dot(last.target, VC_COL.target, ySpeed);
+  dot(last.measured, VC_COL.measured, ySpeed);
+}
+
 // ===== OTA UPDATE =====
 function initOta() {
-  const dropZone    = document.getElementById('otaDropZone');
   const fileInput   = document.getElementById('otaFile');
   const fileNameEl  = document.getElementById('otaFileName');
   const uploadBtn   = document.getElementById('otaUploadBtn');
@@ -1055,56 +1336,33 @@ function initOta() {
   const progressBar = document.getElementById('otaProgressBar');
   const progressLbl = document.getElementById('otaProgressLabel');
   const statusEl    = document.getElementById('otaStatus');
-
-  const chooseBtn   = document.getElementById('otaChooseBtn');
   const typeSelect  = document.getElementById('otaType');
 
-  if (!dropZone) return;
+  if (!fileInput || !uploadBtn) return;
 
   function currentType() {
     return typeSelect && typeSelect.value === 'filesystem' ? 'filesystem' : 'firmware';
   }
 
-  function updateUploadLabel() {
-    uploadBtn.textContent = currentType() === 'filesystem' ? 'Upload Filesystem' : 'Upload Firmware';
-  }
-
+  // OTA sequence: resume on firmware after a filesystem upload; keep steps synced.
   if (typeSelect) {
-    typeSelect.addEventListener('change', updateUploadLabel);
-    updateUploadLabel();
+    const doneInit = otaLoadDone();
+    if (doneInit.includes('filesystem') && !doneInit.includes('firmware')) typeSelect.value = 'firmware';
+    typeSelect.addEventListener('change', renderOtaSteps);
   }
-
-  // Choose File button opens native file picker
-  chooseBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    fileInput.click();
-  });
-
-  // Drag-and-drop visual feedback
-  dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('drag-over');
-  });
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-  dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) selectFile(file);
-  });
+  renderOtaSteps();
 
   fileInput.addEventListener('change', () => {
     if (fileInput.files[0]) selectFile(fileInput.files[0]);
   });
 
   function selectFile(file) {
-    if (!file.name.endsWith('.bin')) {
+    if (!file.name.toLowerCase().endsWith('.bin')) {
       setOtaStatus('Please select a .bin file.', 'error');
       return;
     }
     fileInput._selectedFile = file;
-    fileNameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
-    dropZone.classList.add('file-selected');
+    if (fileNameEl) fileNameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
     uploadBtn.disabled = false;
     setOtaStatus('');
   }
@@ -1130,9 +1388,22 @@ function initOta() {
     xhr.addEventListener('load', () => {
       try {
         const resp = JSON.parse(xhr.responseText);
-        if (resp.status === 'ok') {
-          setOtaStatus(resp.message || 'Update complete. Device is rebooting...', 'success');
-          uploadBtn.disabled = true;
+        if (resp.success === true) {
+          otaMarkDone(uploadType);
+          if (uploadType === 'filesystem') {
+            // filesystem does not reboot — advance to the firmware step
+            if (typeSelect) typeSelect.value = 'firmware';
+            renderOtaSteps();
+            setOtaStatus('Filesystem updated. Now upload the firmware.', 'success');
+            resetProgress();
+            fileInput._selectedFile = null;
+            fileInput.value = '';
+            if (fileNameEl) fileNameEl.textContent = '';
+            uploadBtn.disabled = true;
+          } else {
+            setOtaStatus(resp.message || 'Update complete. Device is rebooting...', 'success');
+            uploadBtn.disabled = true;
+          }
         } else {
           setOtaStatus('Update failed: ' + (resp.message || 'Unknown error'), 'error');
           resetProgress();
@@ -1154,7 +1425,7 @@ function initOta() {
     uploadBtn.disabled = true;
     setOtaStatus('Uploading...');
 
-    xhr.open('POST', '/api/ota-update?mode=' + uploadType);
+    xhr.open('POST', uploadType === 'filesystem' ? '/api/ota/fs' : '/api/ota');
     xhr.send(formData);
   });
 
@@ -1169,4 +1440,162 @@ function initOta() {
     progressWrap.style.display = 'none';
     uploadBtn.disabled = false;
   }
+}
+
+// ---- OTA two-step sequence (filesystem first, then firmware) -------------
+const OTA_STEPS_KEY = 'oh_ota_steps';
+function otaLoadDone() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(OTA_STEPS_KEY) || '{}');
+    if (!raw.ts || Date.now() - raw.ts > 15 * 60 * 1000) return [];
+    return Array.isArray(raw.done) ? raw.done : [];
+  } catch (e) { return []; }
+}
+function otaSaveDone(done) {
+  localStorage.setItem(OTA_STEPS_KEY, JSON.stringify({ done, ts: Date.now() }));
+}
+function renderOtaSteps() {
+  const sel = document.getElementById('otaType');
+  const cur = sel ? sel.value : 'filesystem';
+  const done = otaLoadDone();
+  document.querySelectorAll('#otaSteps .ota-step').forEach((el) => {
+    const s = el.dataset.step;
+    el.classList.toggle('done', done.includes(s));
+    el.classList.toggle('active', s === cur && !done.includes(s));
+  });
+}
+function otaMarkDone(type) {
+  const done = otaLoadDone();
+  if (!done.includes(type)) done.push(type);
+  otaSaveDone(done);
+  renderOtaSteps();
+}
+
+// ---- Collapsible cards (config/advanced/calibration collapse by default) --
+function initCollapsibleCards() {
+  ['configuration-page', 'advanced-page', 'calibration-page'].forEach((pageId) => {
+    const page = document.getElementById(pageId);
+    if (!page) return;
+    page.querySelectorAll('.card').forEach((card) => {
+      if (card.classList.contains('no-collapse')) return;
+      card.classList.add('collapsible', 'collapsed');
+      const h2 = card.querySelector('h2');
+      if (h2) h2.addEventListener('click', () => card.classList.toggle('collapsed'));
+    });
+  });
+}
+
+/* =======================================================================
+   Per-tile dial gauges (ported from the OpenHaldex theme). The km/h
+   readouts can render as 270 degree dials, toggled in Display Options.
+   ======================================================================= */
+const GAUGE_TILES = [
+  { id: 'incomingSpeed', label: 'Incoming Speed', min: 0, max: 300, unit: 'km/h' },
+  { id: 'measuredSpeed', label: 'Measured Speed', min: 0, max: 300, unit: 'km/h' },
+];
+const TG_R = 40;
+const TG_CIRC = 2 * Math.PI * TG_R;
+const TG_ARC = TG_CIRC * 0.75;
+const TG_GAP = TG_CIRC - TG_ARC;
+const GAUGE_PREFS_KEY = 'speedPulserGaugePrefs';
+const GAUGE_DEFAULTS = { tiles: ['incomingSpeed', 'measuredSpeed'] };
+let gaugePrefs = loadGaugePrefs();
+
+function loadGaugePrefs() {
+  try {
+    const raw = localStorage.getItem(GAUGE_PREFS_KEY);
+    if (raw) {
+      const p = JSON.parse(raw);
+      return { tiles: Array.isArray(p.tiles) ? p.tiles : GAUGE_DEFAULTS.tiles.slice() };
+    }
+  } catch (e) { /* defaults */ }
+  return { tiles: GAUGE_DEFAULTS.tiles.slice() };
+}
+function saveGaugePrefs() {
+  try { localStorage.setItem(GAUGE_PREFS_KEY, JSON.stringify(gaugePrefs)); } catch (e) {}
+}
+function ensureTileGauge(tile) {
+  if (tile.querySelector('.tile-gauge')) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'tile-gauge';
+  wrap.innerHTML =
+    `<svg viewBox="0 0 100 100" aria-hidden="true">` +
+    `<circle class="tg-track" cx="50" cy="50" r="${TG_R}" transform="rotate(135 50 50)" ` +
+    `stroke-dasharray="${TG_ARC.toFixed(2)} ${TG_GAP.toFixed(2)}"/>` +
+    `<circle class="tg-fill" cx="50" cy="50" r="${TG_R}" transform="rotate(135 50 50)" ` +
+    `stroke-dasharray="0 ${TG_CIRC.toFixed(2)}"/>` +
+    `<text class="tg-val" x="50" y="52" text-anchor="middle">--</text>` +
+    `<text class="tg-unit" x="50" y="66" text-anchor="middle"></text>` +
+    `<text class="tg-min" x="24" y="92" text-anchor="middle">0</text>` +
+    `<text class="tg-max" x="76" y="92" text-anchor="middle">0</text>` +
+    `</svg>`;
+  tile.appendChild(wrap);
+}
+function applyGaugePrefs() {
+  GAUGE_TILES.forEach((t) => {
+    const el = document.getElementById(t.id);
+    if (!el) return;
+    const tile = el.closest('.gauge');
+    if (!tile) return;
+    ensureTileGauge(tile);
+    const on = gaugePrefs.tiles.includes(t.id);
+    tile.classList.toggle('as-gauge', on);
+    if (on) {
+      const unitEl = tile.querySelector('.tg-unit');
+      const srcUnit = tile.querySelector('.gauge-unit');
+      if (unitEl) unitEl.textContent = srcUnit ? srcUnit.textContent.trim() : t.unit;
+      const minEl = tile.querySelector('.tg-min');
+      const maxEl = tile.querySelector('.tg-max');
+      if (minEl) minEl.textContent = t.min;
+      if (maxEl) maxEl.textContent = t.max;
+    }
+  });
+}
+function updateTileGauges() {
+  GAUGE_TILES.forEach((t) => {
+    const el = document.getElementById(t.id);
+    if (!el) return;
+    const tile = el.closest('.gauge');
+    if (!tile || !tile.classList.contains('as-gauge')) return;
+    const raw = parseFloat(el.textContent);
+    const valEl = tile.querySelector('.tg-val');
+    const fillEl = tile.querySelector('.tg-fill');
+    if (!valEl || !fillEl) return;
+    const gaugeWrap = tile.querySelector('.tile-gauge');
+    if (gaugeWrap) gaugeWrap.classList.toggle('warn', el.style.color === 'orange' || el.classList.contains('test-active'));
+    if (Number.isNaN(raw)) {
+      valEl.textContent = '--';
+      fillEl.style.strokeDasharray = `0 ${TG_CIRC.toFixed(2)}`;
+      return;
+    }
+    valEl.textContent = el.textContent;
+    const frac = Math.max(0, Math.min(1, (raw - t.min) / (t.max - t.min || 1)));
+    fillEl.style.strokeDasharray = `${(TG_ARC * frac).toFixed(2)} ${TG_CIRC.toFixed(2)}`;
+  });
+}
+function initGaugeUI() {
+  const host = document.getElementById('gaugeCustomizer');
+  if (host) {
+    host.innerHTML = '';
+    GAUGE_TILES.forEach((t) => {
+      const label = document.createElement('label');
+      label.className = 'tile-opt';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = gaugePrefs.tiles.includes(t.id);
+      cb.addEventListener('change', () => {
+        const set = new Set(gaugePrefs.tiles);
+        if (cb.checked) set.add(t.id); else set.delete(t.id);
+        gaugePrefs.tiles = [...set];
+        saveGaugePrefs();
+        applyGaugePrefs();
+      });
+      const span = document.createElement('span');
+      span.textContent = t.label;
+      label.appendChild(cb);
+      label.appendChild(span);
+      host.appendChild(label);
+    });
+  }
+  applyGaugePrefs();
 }

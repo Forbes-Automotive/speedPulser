@@ -1,6 +1,7 @@
 #include "speedPulser_control.h"
 #include "speedPulser_defs.h"
 #include "speedPulser_calBuilder.h"
+#include "speedPulser_voltage.h"
 
 // ===== Control Variables =====
 volatile unsigned long dutyCycleIncoming = 0;
@@ -81,10 +82,84 @@ uint16_t applyConfiguredSpeedOffset(uint16_t speedKph)
 }
 
 // ===== Interrupt Handler =====
-// File-scope (not a function-local static): a function-local static with a
-// runtime initializer would emit a __cxa_guard_acquire on first use, which takes
-// a FreeRTOS mutex with a timeout — illegal in an ISR and asserts in queue.c.
-static volatile unsigned long incomingPreviousMicros = 0;
+// Windowed frequency capture for the vehicle hall input. Deriving Hz from a single
+// edge-to-edge period turns tone-wheel / tooth-spacing jitter straight into a jumpy
+// reading, so instead the ISR accumulates the summed edge intervals and the interval
+// count, and the task reads-and-clears the pair once per window: freq = count /
+// summedInterval is a true average over the window — exactly how the closed-loop
+// tacho (feedbackPulse) already works.
+//
+// File-scope (not a function-local static): a function-local static with a runtime
+// initializer would emit a __cxa_guard_acquire on first use, which takes a FreeRTOS
+// mutex with a timeout — illegal in an ISR and asserts in queue.c.
+struct PulseWindow
+{
+  volatile uint32_t accumUs;    // summed edge-to-edge intervals (us) this window
+  volatile uint32_t count;      // number of intervals summed into accumUs
+  volatile uint32_t lastEdgeUs; // micros() of the previous accepted edge (kept across windows)
+};
+
+static PulseWindow hallPulse = {0, 0, 0};
+
+// Reject edges closer together than this. Ignition-coil EMI couples in as
+// sub-millisecond bursts, while a real input edge tops out around 230 Hz (~4.3 ms),
+// so anything faster than ~3 ms (333 Hz) can't be a genuine pulse and is dropped.
+static const uint32_t PULSE_MIN_INTERVAL_US = 3000;
+
+// Guards the read-and-clear of the pulse window against the ISR. portMUX is the
+// FreeRTOS/ESP32-safe primitive; a global noInterrupts() would starve the WiFi radio.
+static portMUX_TYPE hallPulseMux = portMUX_INITIALIZER_UNLOCKED;
+
+// Accumulate one edge into a window. Returns true when the edge was accepted (it
+// advanced the average), false when it merely seeded the window or was rejected as
+// a glitch. lastEdgeUs is kept on a glitch so the next real edge still measures from
+// the last good edge.
+static inline bool IRAM_ATTR pulseEdge(PulseWindow &w, uint32_t now)
+{
+  uint32_t last = w.lastEdgeUs;
+  if (last == 0)
+  {
+    w.lastEdgeUs = now; // seed on the first pulse only
+    return false;
+  }
+  uint32_t interval = now - last;
+  if (interval < PULSE_MIN_INTERVAL_US)
+    return false; // coil EMI / bounce: ignore, keep the last good edge
+  w.accumUs += interval;
+  w.count++;
+  w.lastEdgeUs = now;
+  return true;
+}
+
+// Read-and-clear a window, returning its averaged frequency in Hz, or -1 when no
+// fresh edges arrived (caller should hold the previous value). lastEdgeUs is left
+// intact so the next window's first interval bridges from this window's last edge.
+static float readPulseHz(PulseWindow &w)
+{
+  portENTER_CRITICAL(&hallPulseMux);
+  uint32_t count = w.count;
+  uint32_t accum = w.accumUs;
+  w.count = 0;
+  w.accumUs = 0;
+  portEXIT_CRITICAL(&hallPulseMux);
+  if (count >= 1 && accum > 0)
+    return (float)count * 1000000.0f / (float)accum;
+  return -1.0f;
+}
+
+// Full reset (including the edge reference) — used on timeout / test transitions so
+// a stale lastEdgeUs can't inject one bogus huge-interval reading when input resumes.
+static void resetPulseWindow(PulseWindow &w)
+{
+  portENTER_CRITICAL(&hallPulseMux);
+  w.accumUs = 0;
+  w.count = 0;
+  w.lastEdgeUs = 0;
+  portEXIT_CRITICAL(&hallPulseMux);
+}
+
+static float readHallHz() { return readPulseHz(hallPulse); }
+static void resetHallPulseCounter() { resetPulseWindow(hallPulse); }
 
 // Interrupt routine for the incoming pulse from opto-isolator.
 // IRAM_ATTR is required: this fires from a GPIO interrupt and must be able to
@@ -93,29 +168,15 @@ void IRAM_ATTR incomingHz()
 {
   // Ignore the vehicle hall input entirely while bench-testing or calibrating —
   // the motor is driven from the Speed Test / Cal controls, so an incoming signal
-  // must not touch dutyCycleIncoming, lastPulse or the LED counter until the test
+  // must not touch the window, lastPulse or the LED counter until the test
   // (or cal) is turned off.
   if (testSpeedo || testCal)
     return;
-
-  unsigned long presentMicros = micros();
-  unsigned long previousMicros = incomingPreviousMicros;
-
-  if (previousMicros == 0)
+  if (pulseEdge(hallPulse, micros()))
   {
-    incomingPreviousMicros = presentMicros; // seed on the first pulse only
-    return;
+    lastPulse = xTaskGetTickCountFromISR(); // FreeRTOS-safe tick snapshot
+    ledCounter++;                           // count for LED flashing
   }
-
-  unsigned long revolutionTime = presentMicros - previousMicros;
-
-  if (revolutionTime < 1000UL)
-    return; // debounce, avoid divide by 0
-
-  dutyCycleIncoming = (60000000UL / revolutionTime) / 60; // calculate frequency
-  incomingPreviousMicros = presentMicros;
-  lastPulse = xTaskGetTickCountFromISR(); // FreeRTOS-safe tick snapshot
-  ledCounter++;                           // count for LED flashing
 }
 
 // ===== Speed Matching Function =====
@@ -433,6 +494,110 @@ int16_t applyFeedbackTrim(uint16_t targetSpeed, uint16_t baseDuty)
   return (int16_t)corrected; // final applied duty (0..PWM_DUTY_MAX)
 }
 
+// ===== V4 Mid-Ranging Control (voltage + PWM) =====
+// New-board control law. Because the gauge is linear (needle ∝ motor RPM), one
+// top RPM point (feedbackMaxFreq) defines the whole scale. A FAST inner PID
+// drives the throttle PWM to hit the target RPM; a SLOW integrator trims the buck
+// voltage to keep that PWM near a nominal centre, so the voltage self-schedules
+// to whatever the motor's non-linear curve needs at every speed — no multi-point
+// calibration. See speedPulser_voltage.cpp for the hardware layer.
+static float midPidIntegral = 0.0f; // inner-loop integral (normalised freq·s)
+static float midPidPrevErr = 0.0f;  // inner-loop previous error (normalised)
+static float voltTrim = 0.0f;       // slow voltage-trim integrator output (0..1 offset)
+
+void resetMidRanging()
+{
+  midPidIntegral = 0.0f;
+  midPidPrevErr = 0.0f;
+  voltTrim = 0.0f;
+  lastPwmFrac = 0.0f;
+}
+
+// Feed-forward voltage seed: linear from vMin at 0 to vMax at top speed.
+static float voltFeedForward(uint16_t targetSpeed)
+{
+  const uint16_t top = maxSpeed > 0 ? maxSpeed : 1;
+  float frac = (float)targetSpeed / (float)top;
+  if (frac < 0.0f) frac = 0.0f;
+  if (frac > 1.0f) frac = 1.0f;
+  return vcVoltMin + (vcVoltMax - vcVoltMin) * frac;
+}
+
+// Motor tacho frequency (Hz) expected at a road speed, from the one-point cal.
+static float targetFreqFor(uint16_t targetSpeed, uint16_t scaleFreq)
+{
+  const uint16_t spdSpan = maxSpeed > 0 ? maxSpeed : 1;
+  return (float)targetSpeed * (float)scaleFreq / (float)spdSpan;
+}
+
+// Called on the 100 ms control cadence. Returns the applied raw 12-bit motor duty.
+int16_t applyMidRangingControl(uint16_t targetSpeed)
+{
+  const float PID_PERIOD_S = 0.1f;
+
+  // Target off -> motor off, rail back to minimum, loop state cleared.
+  if (targetSpeed == 0)
+  {
+    resetMidRanging();
+    setMotorVoltageCmd(vcVoltMin);
+    pidCorrection = 0;
+    return 0;
+  }
+
+  const float measFreq = updateMeasuredFreq();
+  const uint16_t scaleFreq = feedbackMaxFreq > 0 ? feedbackMaxFreq : 1;
+
+  // No tacho yet: run open-loop on the voltage schedule + nominal PWM. Keeps
+  // measuring so feedbackAvailable can latch and we upgrade to closed loop.
+  if (!feedbackAvailable)
+  {
+    setMotorVoltageCmd(voltFeedForward(targetSpeed));
+    lastPwmFrac = vcPwmNominal;
+    pidCorrection = 0;
+    return (int16_t)(vcPwmNominal * (float)PWM_DUTY_MAX + 0.5f);
+  }
+
+  // Normalised frequency error (dimensionless) keeps the gains scale-independent.
+  const float err = (targetFreqFor(targetSpeed, scaleFreq) - measFreq) / (float)scaleFreq;
+
+  midPidIntegral += err * PID_PERIOD_S;
+  midPidIntegral = constrain(midPidIntegral, -1.0f, 1.0f); // ±100% authority cap
+  const float deriv = (err - midPidPrevErr) / PID_PERIOD_S;
+  midPidPrevErr = err;
+
+  // Inner output is an ABSOLUTE throttle fraction centred on the nominal.
+  float pwmFrac = vcPwmNominal + vcKp * err + vcKi * midPidIntegral + vcKd * deriv;
+  if (pwmFrac < vcPwmMin) pwmFrac = vcPwmMin;
+  if (pwmFrac > 1.0f)     pwmFrac = 1.0f;
+  lastPwmFrac = pwmFrac;
+
+  // Slow outer loop @ ~500 ms: trim the voltage to pull the PWM back to nominal.
+  static uint8_t outerDiv = 0;
+  if (++outerDiv >= 5)
+  {
+    const float OUTER_PERIOD_S = 0.5f;
+    outerDiv = 0;
+    voltTrim += vcVoltGain * (pwmFrac - vcPwmNominal) * OUTER_PERIOD_S;
+    voltTrim = constrain(voltTrim, -1.0f, 1.0f);
+    setMotorVoltageCmd(voltFeedForward(targetSpeed) + voltTrim); // clamps internally
+  }
+
+  uint32_t duty = (uint32_t)(pwmFrac * (float)PWM_DUTY_MAX + 0.5f);
+  if (duty > PWM_DUTY_MAX) duty = PWM_DUTY_MAX;
+  pidCorrection = (int16_t)((pwmFrac - vcPwmNominal) * (float)PWM_DUTY_MAX); // reuse for UI/diag
+
+  static uint8_t midLogDiv = 0;
+  if (++midLogDiv >= 10)
+  {
+    midLogDiv = 0;
+    DEBUG_FB("mid: tgtF=%.1f measF=%.1f/%u err=%+.3f | pwm=%.0f%% volt=%.0f%% (ff=%.0f%% trim=%+.2f)",
+             targetFreqFor(targetSpeed, scaleFreq), measFreq, scaleFreq, err,
+             pwmFrac * 100.0f, lastVoltageCmd * 100.0f,
+             voltFeedForward(targetSpeed) * 100.0f, voltTrim);
+  }
+  return (int16_t)duty;
+}
+
 // ===== Speed Control Task =====
 // FreeRTOS task for continuous speed control loop
 void speedControlTask(void *parameter)
@@ -448,6 +613,10 @@ void speedControlTask(void *parameter)
     // but the PCB has no feedback trace (legacy board) the loop stays open-loop, so
     // an unaware user can't accidentally drive a closed loop with no measurement.
     const bool pidActive = feedbackEnable && feedbackAvailable;
+
+    // V4 board with voltage control engaged: the buck rail + PWM are driven by the
+    // mid-ranging law instead of the legacy feed-forward/PID-trim path.
+    const bool voltageMode = boardHasVoltageControl && voltageControlEnable;
 
     // Flash onboard LED to show incoming pulses; rolls over at averageFilter count
     if (ledCounter >= averageFilter)
@@ -470,6 +639,7 @@ void speedControlTask(void *parameter)
       dutyCycle = 0;
       rawCount = 0;
       samples.clear();
+      resetHallPulseCounter();
 
       if (!testSpeedo && !testCal)
       {
@@ -479,6 +649,11 @@ void speedControlTask(void *parameter)
         requestedSpeed = 0;
         measuredSpeed = 0;
         resetPid();
+        if (voltageMode)
+        {
+          resetMidRanging();
+          setMotorVoltageCmd(vcVoltMin); // drop the rail back to minimum when idle
+        }
       }
       // Speed display updated via API
     }
@@ -497,10 +672,24 @@ void speedControlTask(void *parameter)
     // Test mode: manual speed or duty cycle
     if (testCal)
     {
+      if (voltageMode)
+      {
+        // V4 calibration is manual: the user lifts VOLTAGE and/or PWM until the
+        // needle pegs the top mark, then captures the measured RPM as the one
+        // top point (feedbackMaxFreq). Drive both actuators straight from the UI.
+        setMotorVoltageCmd(tempDutyCycle == 0 ? vcVoltMin : tempVoltageCmd);
+        setMotorDutyRaw(tempDutyCycle);
+        appliedDutyCycle = tempDutyCycle;
+        if ((xTaskGetTickCount() - lastMeasTick) >= pdMS_TO_TICKS(100))
+        {
+          lastMeasTick = xTaskGetTickCount();
+          updateMeasuredFreq(); // keep the RPM readout live for capture
+        }
+      }
       // Cal building is open-loop increase by default (no PID).
       // With feedback (PID) enabled it instead drives to the Speed Test target, so a
       // finished cal can be verified closed-loop without leaving the builder.
-      if (pidActive)
+      else if (pidActive)
       {
         if ((xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
         {
@@ -525,7 +714,25 @@ void speedControlTask(void *parameter)
     }
     else if (testSpeedo)
     {
-      if (pidActive)
+      if (voltageMode)
+      {
+        // V4 closed-loop bench test: hold the set speed via the mid-ranging law.
+        if ((xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
+        {
+          lastPidTick = xTaskGetTickCount();
+          uint16_t setpoint = applyConfiguredSpeedOffset(tempSpeed);
+          setpoint = setpoint * speedMultiplier;
+          if (convertToMPH)
+          {
+            setpoint = setpoint * mphFactor;
+          }
+          requestedSpeed = setpoint;
+          uint16_t d = (uint16_t)applyMidRangingControl(setpoint);
+          setMotorDutyRaw(d);
+          appliedDutyCycle = d;
+        }
+      }
+      else if (pidActive)
       {
         // Closed-loop bench test: hold the set speed and let the PID trim the
         // duty from the GPIO4 feedback, so you can confirm it fights a load
@@ -555,14 +762,13 @@ void speedControlTask(void *parameter)
     // Normal operation: convert incoming pulses to motor speed
     if (!testSpeedo && !testCal)
     {
-      // Sample once per received hall pulse (tracked by the ISR tick stamp), not
-      // only when the frequency value changes: a rock-steady input never changed
-      // the reading, so the median never refilled and the incoming speed could sit
-      // frozen/blank while the motor still ran.
-      static TickType_t lastSampledPulse = 0;
-      if (lastPulse != lastSampledPulse)
+      // Windowed frequency: read-and-clear the accumulator once per loop so the
+      // reading is a true average over the window instead of one jittery edge-to-edge
+      // period. Returns <0 when no fresh edges arrived — hold the last value then.
+      float hallHz = readHallHz();
+      if (hallHz >= 0.0f)
       {
-        lastSampledPulse = lastPulse;
+        dutyCycleIncoming = (unsigned long)(hallHz + 0.5f);
         DEBUG_CTRL("in freq=%lu Hz", (unsigned long)dutyCycleIncoming);
 
         // Clamp the incoming frequency to the configured hall range before mapping
@@ -601,8 +807,11 @@ void speedControlTask(void *parameter)
           }
           requestedSpeed = finalSpeed;                      // offset-applied target speed (PID setpoint)
           feedforwardDuty = speedToPwmDuty(requestedSpeed); // raw 12-bit feed-forward base (custom-cal aware)
-          if (!pidActive)
+          if (!voltageMode && !pidActive)
           {
+            // Legacy open-loop: drive the calibrated feed-forward directly.
+            // (V4 voltage mode and the closed-loop PID both drive on the 100 ms
+            // cadence below, so don't fight them here.)
             setMotorDutyRaw(feedforwardDuty);
             appliedDutyCycle = feedforwardDuty;
             DEBUG_CTRL("open-loop: %u kph -> pwm=%u/%u", requestedSpeed,
@@ -615,7 +824,14 @@ void speedControlTask(void *parameter)
 
       // Closed-loop trim: every 100 ms nudge the base duty so measured speed
       // (GPIO4 feedback) tracks the requested speed. Uses calibration as feed-forward.
-      if (pidActive && (xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
+      if (voltageMode && (xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
+      {
+        lastPidTick = xTaskGetTickCount();
+        uint16_t d = (uint16_t)applyMidRangingControl(requestedSpeed);
+        setMotorDutyRaw(d);
+        appliedDutyCycle = d;
+      }
+      else if (pidActive && (xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
       {
         lastPidTick = xTaskGetTickCount();
         uint16_t trimmed = (uint16_t)applyFeedbackTrim(requestedSpeed, feedforwardDuty);
@@ -628,8 +844,8 @@ void speedControlTask(void *parameter)
     // or feedback not yet available) in any mode so the speed display and cal-capture
     // auto-calibration always have a fresh measurement — and so feedbackAvailable can
     // latch as soon as a real tacho signal appears. With the PID active,
-    // applyFeedbackTrim already measures.
-    if (!pidActive &&
+    // applyFeedbackTrim already measures; in V4 voltage mode applyMidRangingControl does.
+    if (!pidActive && !voltageMode &&
         (xTaskGetTickCount() - lastMeasTick) >= pdMS_TO_TICKS(100))
     {
       lastMeasTick = xTaskGetTickCount();
