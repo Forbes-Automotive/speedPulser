@@ -4,7 +4,9 @@ The SpeedPulser converts digital speed pulses from a gearbox hall sensor (or a [
 
 It is based on a **LOLIN C3 Mini (ESP32-C3)** and uses a **TY3816B** BLDC motor driven via a native LEDC hardware PWM channel.
 
-![SpeedPulser Web UI](/Images/speedPulserUI.png)
+![SpeedPulser Web UI — dashboard, configuration, limits & offset, PID feedback, status monitor, speed test, top-speed calibration and OTA](/Images/speedPulserUI.png)
+
+![SpeedPulser Web UI — voltage control, calibration builder and export / import](/Images/speedPulserUI-2.png)
 
 ---
 
@@ -140,9 +142,11 @@ Take time here — good fitment minimises noise and extends coupler life.
 
 ## WiFi & Web Interface
 
-Connect to the **`SpeedPulser`** WiFi access point and navigate to **`192.168.1.1`** in a browser.
+Connect to the **`SpeedPulser`** WiFi access point (open network) and navigate to **`192.168.1.1`** or **`speedpulser.local`** in a browser.
 
-The interface is a single-page app served from the ESP32's LittleFS flash partition. Settings are applied in real time and saved to EEPROM automatically every 2 seconds.
+The interface is a single-page app served from the ESP32's LittleFS flash partition, built on Forbes Automotive's shared dark theme (the same look used across OpenHaldex, Can2Cluster, SpeedPulserPro, can2rpm, the MQB Steering Wheel Controller and AirLift Controller). Settings are applied in real time and saved to EEPROM automatically every 2 seconds. Current firmware version: **4.01**.
+
+**Status colours:** most tiles use plain text rather than colour, but a per-tile dial gauge (Incoming Speed / Motor Duty) turns **orange/amber** whenever **Speed Test Mode** or **Calibration Mode** is driving the motor — a reminder that the value shown is a synthetic test value, not a live vehicle reading. A missing motor-feedback signal (legacy PCBs without the feedback circuit) shows as plain **N/A** rather than a coloured warning.
 
 ### Dashboard Tab
 
@@ -163,7 +167,8 @@ currently being achieved — from the hall input, Speed Test Mode or Calibration
 
 While **Speed Test Mode** is active, these fields switch to show the chosen test speed and resulting motor duty instead.
 
-![Dashboard tab — live gauges and calibration curve graph](/Images/ui-dashboard.png)
+<p align="center"><img src="/Images/ui-dashboard.png" alt="Dashboard tab — live data tiles (incoming speed, motor duty, offset type and value, measured speed, PID trim) and the calibration curve graph" width="300"></p>
+
 > The bright dot on the graph is the point currently being achieved — from the hall input, Speed Test Mode or Calibration Mode — plotted against the active calibration's duty/speed curve (green dots = captured/sampled anchor points).
 
 ### Configuration Tab
@@ -182,7 +187,13 @@ While **Speed Test Mode** is active, these fields switch to show the chosen test
 | Cluster in MPH | Convert the km/h input signal to mph before looking up the motor duty |
 | Average Filter Samples | Median smoothing window (1–10) for the incoming signal; higher = steadier but slower |
 
-![Configuration tab — calibration selection, needle sweep, speed limits, speed offset and signal filter cards](/Images/ui-configuration.png)
+<p align="center">
+  <img src="/Images/ui-configuration.png" alt="Configuration tab — calibration selection and needle sweep" width="300">
+  &nbsp;&nbsp;
+  <img src="/Images/ui-speed-limits.png" alt="Configuration tab — speed limits, the 5-point speed-dependent offset curve, cluster-in-MPH and the signal filter" width="300">
+</p>
+
+*Configuration: calibration profile and needle sweep (left); speed limits, the offset curve (or fixed offset), MPH conversion and the median filter window (right).*
 
 ### Advanced Tab
 
@@ -192,30 +203,31 @@ While **Speed Test Mode** is active, these fields switch to show the chosen test
 | Feedback Enable | Turn the closed-loop PID duty trim on or off (**not available on legacy PCBs**) |
 | Min Feedback Speed (km/h) | Below this speed the loop runs open-loop (feed-forward only) to stop low-speed hunting; 0 = always closed-loop |
 | PID Kp / Ki / Kd | Feedback loop gains (defaults 0.15 / 1.3 / 0) |
+| PID Deadband (Hz) | Feedback error (in Hz) ignored by the loop, to stop the needle dithering |
 | Reset PID Defaults | Restore the tuned default gains |
+| Voltage Control *(V4 PCB only)* | Enable the closed-loop **buck-converter voltage** trim and set its nominal / minimum PWM, voltage range, trim gain and loop gains |
 | Performance Array Value | Index of the active calibration array |
 | Incoming Pulses | Raw frequency value from the ISR |
 | Raw Count | Number of samples accumulated so far |
 | LED Counter | ISR pulse counter (also drives the onboard LED blink) |
 
-![Advanced tab — Reverse Direction, Feedback Enable, PID gains and the live Status Monitor](/Images/ui-advanced.png)
+<p align="center">
+  <img src="/Images/ui-advanced.png" alt="Advanced tab — motor direction, feedback enable, min feedback speed, PID gains and deadband" width="300">
+  &nbsp;&nbsp;
+  <img src="/Images/ui-status.png" alt="Advanced tab — live status monitor: performance array, incoming pulses, raw count, LED counter, measured speed / frequency, PID trim, buck state, voltage command and PWM fraction" width="300">
+</p>
 > **Reverse Direction** drives GPIO 10 HIGH instead of LOW, flipping the rotation direction for clusters whose motor is mounted the opposite way round.
 > **Feedback Enable** turns the closed-loop PID trim on; the sliders below it tune the loop and **Reset PID Defaults** restores the tuned baseline (0.15 / 1.3 / 0). See [Closed-Loop Feedback (PID)](#closed-loop-feedback-pid) below for how it works.
 
+On a **V4 PCB** the Advanced tab also shows **Voltage Control**. This is a mid-ranging scheme: the fast PID loop above trims PWM duty to hit the target speed, while a slow loop nudges the buck-converter voltage so the PWM stays near its **Nominal PWM** working point (between the **Minimum / Maximum Voltage** limits). Turn it off to fall back to fixed full-voltage PWM, i.e. legacy behaviour.
+
+<p align="center">
+  <img src="/Images/ui-voltage-control.png" alt="Advanced tab — Voltage Control card: enable, nominal and minimum PWM, minimum / maximum voltage, trim gain and PWM loop gains" width="300">
+</p>
+
 ### Calibration Tab
 
-Contains the **Calibration Builder** and **Speed Test Mode**.
-
-**Calibration Builder**  
-
-1. Tick **Enable Calibration Mode** — the motor now follows the big duty read-out instead
-   of the speed source.
-2. Change the duty to the maximum value (**4096**).  Adjust the trimmer to achieve maximum cluster value.
-3. Change the duty with the **−50 / −10 / −1 / +1 / +10 / +50** buttons until the needle sits exactly on a speed mark.
-4. Pick that speed from the **Target speed** or type it in and press **Capture Point**. Each capture
-   is listed under *Captured Points* and can be removed individually.
-5. Repeat across the scale, name the calibration, then **Generate & Apply** to preview it
-   live and **Save to Device** to store it. **Export / Import** shares it as a text block.
+Contains **Speed Test Mode**, **Export / Import** and — depending on the board — either the **Top Speed Calibration** card (V4 PCB, which can lift the motor supply voltage) or the multi-point **Calibration Builder** (earlier PCBs).
 
 **Speed Test Mode**  
 Locks the motor to a user-chosen speed so the cluster can be observed
@@ -224,14 +236,47 @@ calibration process, to give a realistic preview. With feedback enabled the clos
 loop drives to that speed; the dashboard updates in real time to show the chosen speed
 and the resulting motor duty.
 
-![Calibration tab — Speed Test Mode, the Calibration Builder with captured points, and Export/Import](/Images/ui-calibration.png)
-> Example above: five points captured (0, 40, 95, 150, 200 km/h) for a custom "VW Bay VDO 90mph" build, with the duty point sitting at 742/4095 (18.1%). Once at-least two points are captured, **Generate & Apply** interpolates the full curve and **Save to Device** remembers it — it then appears as the **★ Custom** entry in the Configuration tab's calibration list.
+**Top Speed Calibration** *(V4 PCB)*  
+Tick **Enable Calibration Mode**, then raise **Voltage Lift** and/or **PWM Duty** until the
+needle sits exactly on the top-speed mark (the Maximum Speed set on the Configuration tab)
+and press **Capture Top Speed**. Every lower speed then scales linearly from that single
+point; the low cut-off is **Min Feedback Speed** on the Advanced tab.
+
+<p align="center">
+  <img src="/Images/ui-speed-test.png" alt="Calibration tab — Speed Test Mode with enable and test speed slider" width="300">
+  &nbsp;&nbsp;
+  <img src="/Images/ui-top-speed.png" alt="Calibration tab — Top Speed Calibration (V4): calibration mode, voltage lift, PWM duty and Capture Top Speed" width="300">
+</p>
+
+**Calibration Builder** *(earlier PCBs)*  
+
+1. Tick **Enable Calibration Mode** — the motor now follows the big duty read-out instead
+   of the speed source.
+2. Change the duty to the maximum value (**4096**).  Adjust the trimmer to achieve maximum cluster value.
+3. Change the duty with the **−50 / −10 / −1 / +1 / +10 / +50** buttons until the needle sits exactly on a speed mark.
+4. Pick that speed from the **Target speed** or type it in and press **Capture Point**. Each capture
+   is listed under *Captured Points* and can be removed individually.
+5. Repeat across the scale, name the calibration, then **Generate & Apply** to preview it
+   live and **Save to Device** to store it.
+
+**Export / Import**  
+**Export Text** saves the active calibration as a `.txt` you can share or back up and
+**Import Text** loads one back and applies it. **Export C-Array** writes a paste-ready
+firmware preset (a `motorPerformanceN[]` table plus its `calibrationProfiles[]` line) for
+building a calibration in permanently.
+
+<p align="center">
+  <img src="/Images/ui-calibration.png" alt="Calibration tab — Calibration Builder: calibration mode, duty jog buttons, target speed grid, capture point, name, Generate & Apply and Save to Device" width="300">
+  &nbsp;&nbsp;
+  <img src="/Images/ui-export-import.png" alt="Calibration tab — Export Text, Export C-Array and Import Text" width="300">
+</p>
+> Once at least two points are captured, **Generate & Apply** interpolates the full curve and **Save to Device** remembers it — it then appears as the **★ Custom** entry in the Configuration tab's calibration list.
 
 ### OTA Tab
 
-Upload a new compiled `.bin` firmware file directly from the browser — no USB cable required. The device reboots automatically after a successful flash.
+Upload a new compiled `.bin` firmware file directly from the browser — no USB cable required. Two steps: the **Filesystem** image (`littlefs.bin`, the web UI) first, then the **Firmware** image (`firmware.bin`); the step tracker marks each as it completes and the device reboots automatically after the firmware step. See [Over-the-Air Updates](#over-the-air-updates-two-step).
 
-![OTA tab — firmware info and drag-and-drop update uploader](/Images/ui-ota.png)
+<p align="center"><img src="/Images/ui-ota.png" alt="OTA tab — firmware info and the two-step filesystem / firmware uploader" width="300"></p>
 
 ---
 
@@ -283,10 +328,11 @@ Values near index 0 are `0` — the motor's dead band where it will not yet turn
 ```
 Hall sensor pulse
     │
-    ▼  incomingHz()
-    Measures pulse interval → calculates frequency (Hz)
+    ▼  incomingHz()  — windowed capture
+    Accumulates each edge interval + count; rejects pulses < 3 ms (> 333 Hz) as noise
     │
-    ▼  speedControlTask
+    ▼  speedControlTask  (once per loop)
+    frequency = intervals ÷ summed interval time   (true average over the window)
     map(frequency, 0, maxFreqHall, 0, maxSpeed)  →  speed in km/h
     │
     ▼  RunningMedian filter  (averageFilter samples, default 6)
@@ -304,6 +350,8 @@ Hall sensor pulse
     ▼  setMotorDuty()  — native LEDC IDF driver, 10 kHz
     Motor PWM output on GPIO 2
 ```
+
+> **Windowed frequency capture:** Rather than deriving speed from a single edge-to-edge period — which turns tone-wheel / tooth-spacing jitter straight into a jumpy needle — the ISR accumulates the edge intervals and the task averages them once per window. Pulses closer than ~3 ms (> 333 Hz) are rejected, so ignition-coil EMI can't be mistaken for a valid speed.
 
 > **Default hall-sensor scaling:** 1 Hz = 1 km/h. This matches 02J / 02M gearbox sensors used in most VW/Audi applications. Adjust `maxFreqHall` and `maxSpeed` together if your sensor has a different ratio (e.g. set both to 160 for a sensor that outputs 160 Hz at 160 km/h).
 
@@ -363,15 +411,22 @@ As soon as a device reconnects to the WiFi AP, full power is restored automatica
 
 ---
 
-## Over-the-Air Updates
+## Over-the-Air Updates (Two-Step)
 
-New firmware can be flashed without removing the unit from the vehicle:
+New firmware can be flashed without removing the unit from the vehicle. Firmware and the web UI live on separate flash partitions, so updating is a **two-step process** using the shared `ota_manager` module:
 
-1. Build the project in PlatformIO → locate the `.bin` file in `.pio/build/lolin_c3_mini/`.
-2. Connect to the `SpeedPulser` WiFi AP.
+1. **Filesystem** — in the **OTA** tab, select **Filesystem (web UI)** and upload `littlefs.bin` (`POST /api/ota/fs`, written to the SPIFFS partition). This updates `index.html` / `app.js` / `style.css`; the device does **not** reboot after this step, so you can go straight on to step 2.
+2. **Firmware** — select **Firmware (application)** and upload `firmware.bin` (`POST /api/ota`, written to the OTA app partition). The device reboots automatically once this completes.
+
+Steps in full:
+
+1. Build the project in PlatformIO → locate `firmware.bin` in `.pio/build/lolin_c3_mini/` and `littlefs.bin` under the filesystem build output.
+2. Connect to the `SpeedPulser` WiFi AP (or `speedpulser.local`).
 3. Open the **OTA** tab in the browser.
-4. Select the `.bin` file and click Upload.
-5. The device flashes and reboots automatically.
+4. Upload the filesystem image first, then the firmware image.
+5. The device flashes and reboots automatically after the firmware step.
+
+`GET /api/ota/info` reports the running version, board and hardware.
 
 ---
 
