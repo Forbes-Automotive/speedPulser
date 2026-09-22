@@ -16,6 +16,15 @@ void connectWifi()
   wcfg.hostName  = wifiHostName;    // SoftAP SSID + hostname
   wcfg.mdnsName  = "speedpulser";   // -> http://speedpulser.local
   wcfg.fwVersion = FW_VERSION;      // substituted for %FW_VERSION% in index.html
+  // MUST precede wifiManagerInit(): that mounts the web-UI filesystem via
+  // otaFsMountSafe(), so ota_manager has to be configured first or a failed
+  // mount passes silently.
+  ota_config_t ocfg = otaDefaultConfig();
+  ocfg.fwVersion  = FW_VERSION;
+  ocfg.product    = "SpeedPulser";
+  ocfg.githubRepo = "Forbes-Automotive/speedPulser"; // Releases/ + releases.json for "Check for updates"
+  otaManagerInit(&ocfg);
+
   wifiManagerInit(&wcfg);
   WiFi.setTxPower(WIFI_POWER_8_5dBm); // reduce TX power for stability on C3
 

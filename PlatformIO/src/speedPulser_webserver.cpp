@@ -20,11 +20,6 @@ void setupWebServer() {
   // Shared OTA + Home WiFi routes FIRST: ota_manager's first route carries the
   // filter that notes web activity for every request (otaWebClientActive()),
   // and /api/wifi/sta must precede any /api/wifi... route of our own.
-  ota_config_t ocfg = otaDefaultConfig();
-  ocfg.fwVersion  = FW_VERSION;
-  ocfg.product    = "SpeedPulser";
-  ocfg.githubRepo = "Forbes-Automotive/speedPulser"; // Releases/ + releases.json for "Check for updates"
-  otaManagerInit(&ocfg);
   otaManagerAttach(server);
   wifiManagerAttachSta(server);
 
