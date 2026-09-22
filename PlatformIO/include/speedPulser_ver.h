@@ -1,7 +1,8 @@
 #ifndef SPEED_PULSER_VER_H
 #define SPEED_PULSER_VER_H
 
-#define VERSION "4.01" // shared UI theme + common wifi/ota managers (speedpulser.local, /api/ota)
+#define FW_VERSION "4.02" // OTA overhaul: shared ota_manager/wifi_manager v2, guided GitHub update, bridge mode, recovery page
+#define VERSION FW_VERSION  // legacy name used throughout this project
 
 /*
 SpeedPulser - Forbes Automotive '25
@@ -80,7 +81,20 @@ V4.01 - standardised Forbes Automotive UI theme (shared style.css);
         adopted common wifi_manager (mDNS: can2rpm.local) and ota_manager
         (firmware + filesystem OTA via /api/ota, /api/ota/fs); per-product
         cache-busting on web assets
-        
+V4.02 - OTA overhaul (shared ota_manager / wifi_manager v2 + data/ota.js, ported
+        from OpenHaldex 9.00): upload callbacks no longer answer mid-body (the
+        old per-chunk "200 OK" made the browser drop the connection after the
+        first 1.4 kB - a crash in AsyncTCP and a half-written partition, so no
+        OTA through the UI had ever completed); filesystem updates unmount
+        first, check the announced size, verify the mount and wipe on failure;
+        boot only mounts a sane superblock and the web server always starts -
+        with no usable UI "/" is a recovery page with the two uploads (replaces
+        the old format-on-fail + "LittleFS not available" root).
+        "Update from GitHub" on the OTA tab (Releases/releases.json via
+        tools/make_release.py) plus a Home WiFi (bridge mode) card; power_manager
+        holds WiFi up while any browser is active. Assets served no-cache (ETag)
+        instead of the hand-bumped ?v=.
+
 Notes:
 - Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor
 - Converts to PWM signal for a BLDC motor

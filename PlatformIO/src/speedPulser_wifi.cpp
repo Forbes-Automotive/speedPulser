@@ -15,7 +15,7 @@ void connectWifi()
   wifimgr_config_t wcfg = wifiDefaultConfig();
   wcfg.hostName  = wifiHostName;    // SoftAP SSID + hostname
   wcfg.mdnsName  = "speedpulser";   // -> http://speedpulser.local
-  wcfg.fwVersion = VERSION;         // injected into index.html for cache-busting
+  wcfg.fwVersion = FW_VERSION;      // substituted for %FW_VERSION% in index.html
   wifiManagerInit(&wcfg);
   WiFi.setTxPower(WIFI_POWER_8_5dBm); // reduce TX power for stability on C3
 
@@ -52,7 +52,9 @@ void disconnectWifi()
 
 bool powerIsBusy()
 {
-  return WiFi.softAPgetStationNum() > 0 || otaInProgress();
+  // ... or a browser has hit us in the last 30 s (a phone on the home router
+  // in bridge mode is not an AP station).
+  return WiFi.softAPgetStationNum() > 0 || otaInProgress() || otaWebClientActive();
 }
 
 // ACTIVE -> REDUCED: close the web server cleanly before the radio drops.

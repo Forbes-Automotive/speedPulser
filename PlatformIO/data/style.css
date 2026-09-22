@@ -643,3 +643,62 @@ input[type="file"]::file-selector-button:hover { background:rgba(36,209,196,.12)
   .grid-3 { grid-template-columns: repeat(2, 1fr); }
   .gauge-lg { height: 240px; }
 }
+
+/* ==========================================================================
+   OTA tab (shared) - appended 2026-09-20. Everything data/ota.js and
+   _SharedTheme/ota_tab.html need, namespaced ota-/upd- so it can sit at the
+   end of any project's style.css without clobbering it. Uses the theme
+   variables: --panel-2 --line --muted --text --accent --accent-2 --ok
+   --danger --bg.
+   ========================================================================== */
+.ota-info { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.ota-info > div { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.ota-info span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.ota-info strong { font-size: 16px; font-weight: 700; word-break: break-word; }
+.ota-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+.ota-field { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; color: var(--muted); font-size: 13px; }
+.ota-field select, .ota-field input[type="file"] {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+  color: var(--text); font-size: 14px; width: 100%; box-sizing: border-box;
+}
+.ota-steps { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; }
+.ota-step {
+  flex: 1 1 120px; display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--line);
+  border-radius: 12px; color: var(--muted); font-size: 13px; font-weight: 600;
+}
+.ota-step-num {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+  border-radius: 50%; flex: none; background: var(--line); color: var(--text); font-size: 12px; font-weight: 700;
+}
+.ota-step.active { border-left-color: var(--accent); color: var(--text); }
+.ota-step.active .ota-step-num { background: var(--accent); color: var(--bg); }
+.ota-step.done { border-left-color: var(--ok); color: var(--ok); }
+.ota-step.done .ota-step-num { background: var(--ok); color: var(--bg); font-size: 0; }
+.ota-step.done .ota-step-num::after { content: "\2713"; font-size: 13px; }
+#updSteps .ota-step { flex: 1 1 140px; font-size: 12px; padding: 8px 10px; }
+.ota-progress { position: relative; height: 22px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; overflow: hidden; margin: 10px 0; }
+.ota-progress-bar { height: 100%; width: 0; background: var(--accent); transition: width .2s ease; }
+.ota-progress-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--text); }
+.status-line { margin-top: 10px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.status-line.error { color: var(--danger); }
+.status-line.ok { color: var(--ok); }
+.status-line a, .hint a { color: var(--accent); }
+#updStatus { margin-bottom: 12px; }
+#updState.upd-available, #otaSafe.upd-available { color: var(--accent-2); }
+#updState.upd-current, #otaSafe.upd-current { color: var(--ok); }
+#updState.upd-bad, #otaSafe.upd-bad { color: var(--danger); }
+.upd-beta { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+.upd-notes {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  margin-bottom: 14px; color: var(--muted); font-size: 13px; line-height: 1.5; white-space: pre-line;
+}
+.upd-notes:empty { display: none; }
+.ota-wifi-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.ota-wifi-row input {
+  flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; color: var(--text); font-size: 14px;
+}
+.ota-wifi-row input::placeholder { color: var(--muted); }
+.ota-wifi-row input:focus { outline: none; border-color: var(--accent); }
+.btn.ota-icon { flex: none; width: 44px; padding: 0; font-size: 18px; line-height: 1; }

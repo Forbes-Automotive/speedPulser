@@ -14,7 +14,6 @@ function initApp() {
   initNavigation();
   initControls();
   initVoltageControls();
-  initOta();
   initCollapsibleCards();
   initGaugeUI();
   initCalBuilder();
@@ -526,18 +525,7 @@ async function fetchSettings() {
     const vcCalEl = document.getElementById('vcTestCal');
     if (vcCalEl) vcCalEl.checked = data.testCal || false;
 
-    // Update firmware info on OTA page
-    try {
-      const verResponse = await fetch('/api/ota/info');
-      const verData = await verResponse.json();
-      document.getElementById('otaFwVersion').textContent = verData.version || '--';
-      document.getElementById('otaHardware').textContent = verData.hardware || '--';
-      document.getElementById('otaBoard').textContent = verData.board || '--';
-    } catch (e) {
-      document.getElementById('otaFwVersion').textContent = '--';
-      document.getElementById('otaHardware').textContent = '--';
-      document.getElementById('otaBoard').textContent = '--';
-    }
+    // (firmware/web UI versions on the OTA page are filled in by the shared ota.js)
 
     settingsLoaded = true;
   } catch (error) {
@@ -1325,150 +1313,6 @@ function drawVoltageChart() {
   dot(last.pwm, VC_COL.pwm, yPct);
   dot(last.target, VC_COL.target, ySpeed);
   dot(last.measured, VC_COL.measured, ySpeed);
-}
-
-// ===== OTA UPDATE =====
-function initOta() {
-  const fileInput   = document.getElementById('otaFile');
-  const fileNameEl  = document.getElementById('otaFileName');
-  const uploadBtn   = document.getElementById('otaUploadBtn');
-  const progressWrap = document.getElementById('otaProgressWrap');
-  const progressBar = document.getElementById('otaProgressBar');
-  const progressLbl = document.getElementById('otaProgressLabel');
-  const statusEl    = document.getElementById('otaStatus');
-  const typeSelect  = document.getElementById('otaType');
-
-  if (!fileInput || !uploadBtn) return;
-
-  function currentType() {
-    return typeSelect && typeSelect.value === 'filesystem' ? 'filesystem' : 'firmware';
-  }
-
-  // OTA sequence: resume on firmware after a filesystem upload; keep steps synced.
-  if (typeSelect) {
-    const doneInit = otaLoadDone();
-    if (doneInit.includes('filesystem') && !doneInit.includes('firmware')) typeSelect.value = 'firmware';
-    typeSelect.addEventListener('change', renderOtaSteps);
-  }
-  renderOtaSteps();
-
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) selectFile(fileInput.files[0]);
-  });
-
-  function selectFile(file) {
-    if (!file.name.toLowerCase().endsWith('.bin')) {
-      setOtaStatus('Please select a .bin file.', 'error');
-      return;
-    }
-    fileInput._selectedFile = file;
-    if (fileNameEl) fileNameEl.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
-    uploadBtn.disabled = false;
-    setOtaStatus('');
-  }
-
-  uploadBtn.addEventListener('click', () => {
-    const file = fileInput._selectedFile;
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('firmware', file, file.name);
-
-    const uploadType = currentType();
-    const xhr = new XMLHttpRequest();
-
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        progressBar.style.width = pct + '%';
-        progressLbl.textContent = pct + '%';
-      }
-    });
-
-    xhr.addEventListener('load', () => {
-      try {
-        const resp = JSON.parse(xhr.responseText);
-        if (resp.success === true) {
-          otaMarkDone(uploadType);
-          if (uploadType === 'filesystem') {
-            // filesystem does not reboot — advance to the firmware step
-            if (typeSelect) typeSelect.value = 'firmware';
-            renderOtaSteps();
-            setOtaStatus('Filesystem updated. Now upload the firmware.', 'success');
-            resetProgress();
-            fileInput._selectedFile = null;
-            fileInput.value = '';
-            if (fileNameEl) fileNameEl.textContent = '';
-            uploadBtn.disabled = true;
-          } else {
-            setOtaStatus(resp.message || 'Update complete. Device is rebooting...', 'success');
-            uploadBtn.disabled = true;
-          }
-        } else {
-          setOtaStatus('Update failed: ' + (resp.message || 'Unknown error'), 'error');
-          resetProgress();
-        }
-      } catch (_) {
-        setOtaStatus('Unexpected response from device.', 'error');
-        resetProgress();
-      }
-    });
-
-    xhr.addEventListener('error', () => {
-      // A network error here is expected if the device reboots before replying
-      setOtaStatus('Update sent. Device may be rebooting — please wait and reconnect.', 'success');
-    });
-
-    progressWrap.style.display = 'block';
-    progressBar.style.width = '0%';
-    progressLbl.textContent = '0%';
-    uploadBtn.disabled = true;
-    setOtaStatus('Uploading...');
-
-    xhr.open('POST', uploadType === 'filesystem' ? '/api/ota/fs' : '/api/ota');
-    xhr.send(formData);
-  });
-
-  function setOtaStatus(msg, type) {
-    statusEl.textContent = msg;
-    statusEl.className = 'ota-status' + (type ? ' ' + type : '');
-  }
-
-  function resetProgress() {
-    progressBar.style.width = '0%';
-    progressLbl.textContent = '0%';
-    progressWrap.style.display = 'none';
-    uploadBtn.disabled = false;
-  }
-}
-
-// ---- OTA two-step sequence (filesystem first, then firmware) -------------
-const OTA_STEPS_KEY = 'oh_ota_steps';
-function otaLoadDone() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(OTA_STEPS_KEY) || '{}');
-    if (!raw.ts || Date.now() - raw.ts > 15 * 60 * 1000) return [];
-    return Array.isArray(raw.done) ? raw.done : [];
-  } catch (e) { return []; }
-}
-function otaSaveDone(done) {
-  localStorage.setItem(OTA_STEPS_KEY, JSON.stringify({ done, ts: Date.now() }));
-}
-function renderOtaSteps() {
-  const sel = document.getElementById('otaType');
-  const cur = sel ? sel.value : 'filesystem';
-  const done = otaLoadDone();
-  document.querySelectorAll('#otaSteps .ota-step').forEach((el) => {
-    const s = el.dataset.step;
-    el.classList.toggle('done', done.includes(s));
-    el.classList.toggle('active', s === cur && !done.includes(s));
-  });
-}
-function otaMarkDone(type) {
-  const done = otaLoadDone();
-  if (!done.includes(type)) done.push(type);
-  otaSaveDone(done);
-  renderOtaSteps();
 }
 
 // ---- Collapsible cards (config/advanced/calibration collapse by default) --

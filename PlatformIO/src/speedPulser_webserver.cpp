@@ -13,32 +13,20 @@ extern AsyncWebServer server;
  * Initialize AsyncWebServer with API endpoints and static file serving
  */
 void setupWebServer() {
-  // Always bring up API endpoints, even if static FS is unavailable.
-  bool littleFsMounted = LittleFS.begin(false);
-  if (!littleFsMounted) {
-    DEBUG_WEB("LittleFS mount failed; attempting format + remount...");
-    littleFsMounted = LittleFS.begin(true);
-    if (littleFsMounted) {
-      DEBUG_WEB("LittleFS remounted after format");
-    } else {
-      DEBUG_WEB("LittleFS remount failed");
-    }
-  }
+  // The web UI filesystem was mounted (guarded) by wifiManagerInit(); if it is
+  // missing or broken, wifiManagerAttachStatic() serves a recovery page at "/"
+  // with the two upload forms, so nothing is done about it here.
 
-  if (littleFsMounted) {
-    if (!LittleFS.exists("/index.html")) {
-      DEBUG_WEB("LittleFS mounted but /index.html is missing");
-    }
-
-    // Static files are served by wifiManagerAttachStatic() below (with
-    // firmware cache-busting), so no serveStatic here.
-  } else {
-    // Fallback root for diagnosing filesystem flashing issues.
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(500, "text/plain",
-                    "LittleFS not available. Firmware is running, but web assets are missing or FS mount failed.");
-    });
-  }
+  // Shared OTA + Home WiFi routes FIRST: ota_manager's first route carries the
+  // filter that notes web activity for every request (otaWebClientActive()),
+  // and /api/wifi/sta must precede any /api/wifi... route of our own.
+  ota_config_t ocfg = otaDefaultConfig();
+  ocfg.fwVersion  = FW_VERSION;
+  ocfg.product    = "SpeedPulser";
+  ocfg.githubRepo = "Forbes-Automotive/speedPulser"; // Releases/ + releases.json for "Check for updates"
+  otaManagerInit(&ocfg);
+  otaManagerAttach(server);
+  wifiManagerAttachSta(server);
 
   // GET /api/settings - Return current settings
   server.on("/api/settings", HTTP_GET, handleGetSettings);
@@ -76,17 +64,9 @@ void setupWebServer() {
     nullptr,                                  // no upload handler
     handlePostCal);                           // onBody callback
 
-  // OTA (firmware + LittleFS web UI) via the common, project-agnostic module.
-  // Registers /api/ota, /api/ota/fs and /api/ota/info.
-  ota_config_t ocfg = otaDefaultConfig();
-  ocfg.fwVersion = VERSION;
-  otaManagerInit(&ocfg);
-  otaManagerAttach(server);
-
-  // Static web UI with firmware cache-busting (only when LittleFS mounted).
-  if (littleFsMounted) {
-    wifiManagerAttachStatic(server);
-  }
+  // "/" (the UI, or the recovery page when the filesystem holds no usable UI)
+  // + static files with no-cache revalidation.
+  wifiManagerAttachStatic(server);
 
   // Start server
   server.begin();

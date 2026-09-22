@@ -6,6 +6,7 @@
 #include "speedPulser_calBuilder.h"
 #include "speedPulser_voltage.h"
 #include "power_manager.h"
+#include "wifi_manager.h"
 
 /*
 SpeedPulser - Forbes Automotive '26
@@ -99,4 +100,5 @@ void loop()
     // all work is done in tasks - this is just a placeholder
     // to keep the Arduino framework happy
     vTaskDelay(pdMS_TO_TICKS(1000));
+    wifiManagerTick(); // Home WiFi (bridge mode): connection tracking + retry back-off
 }

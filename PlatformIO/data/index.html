@@ -9,7 +9,7 @@
     <meta http-equiv="Expires" content="0">
 
     <title>SpeedPulser V4</title>
-    <link rel="stylesheet" href="style.css?v=speedpulser-4.01">
+    <link rel="stylesheet" href="style.css?v=%FW_VERSION%">
 </head>
 
 <body>
@@ -571,51 +571,112 @@
 
         <!-- OTA PAGE -->
         <div class="page" id="ota-page">
-            <section class="card centered-card">
-                <h2>Firmware Info</h2>
-                <div class="info-box">
-                    <p><strong>Firmware Version:</strong> <span id="otaFwVersion">--</span></p>
-                    <p><strong>Hardware:</strong> <span id="otaHardware">--</span></p>
-                    <p><strong>Board:</strong> <span id="otaBoard">--</span></p>
-                </div>
+            <section class="card">
+              <h2>Device</h2>
+              <div class="ota-info">
+                <div><span>Firmware</span><strong id="otaFwVersion">--</strong></div>
+                <div><span>Web UI</span><strong id="otaFsVersion">--</strong></div>
+                <div><span>Board</span><strong id="otaBoard">--</strong></div>
+                <div><span>Updates</span><strong id="otaSafe">--</strong></div>
+              </div>
+              <p class="hint" id="otaSafeHint"></p>
             </section>
-            <section class="card centered-card">
-                <h2>OTA Update</h2>
-                <div class="info-box" style="margin-bottom:1rem">
-                    <p><strong>Filesystem</strong> updates the web interface (<strong>littlefs.bin</strong>).</p>
-                    <p><strong>Firmware</strong> updates the application (compiled <strong>firmware.bin</strong>).</p>
-                    <p>Update the filesystem first, then the firmware. The device reboots automatically once the firmware upload completes.</p>
+
+            <section class="card">
+              <h2>Update from GitHub</h2>
+              <div class="ota-info">
+                <div><span>Installed</span><strong id="updInstalled">--</strong></div>
+                <div><span>Latest</span><strong id="updLatest">--</strong></div>
+                <div><span>Status</span><strong id="updState">Not checked</strong></div>
+              </div>
+              <p class="hint">This browser needs internet while it can still reach the controller: join the controller to your
+                router in <a href="#otaWifiStaCard" id="updGoBridge">Home WiFi</a> below, put this phone on the same network and
+                open the address that card shows. On the controller's own access point alone most phones drop mobile data.
+                Keep this page open until the device has rebooted. Release channel: <code id="updRepo">--</code></p>
+              <div class="ota-row">
+                <button id="updCheckBtn" class="btn primary">Check for updates</button>
+                <button id="updBridgeBtn" class="btn" hidden>Set up Home WiFi</button>
+                <label class="upd-beta"><input type="checkbox" id="updShowAll"> Show beta / older versions</label>
+              </div>
+              <div id="updStatus" class="status-line">Idle</div>
+              <div id="updPicker" hidden>
+                <label class="ota-field">Version
+                  <select id="updVersion"></select>
+                </label>
+                <div id="updNotes" class="upd-notes"></div>
+                <div class="ota-row">
+                  <button id="updInstallBtn" class="btn primary">Install selected</button>
                 </div>
-                <div class="ota-steps" id="otaSteps">
-                    <div class="ota-step" data-step="filesystem"><span class="ota-step-num">1</span> Filesystem</div>
-                    <div class="ota-step" data-step="firmware"><span class="ota-step-num">2</span> Firmware</div>
-                </div>
-                <div class="input-group">
-                    <label>Update Type</label>
-                    <select id="otaType">
-                        <option value="filesystem">Filesystem (web UI)</option>
-                        <option value="firmware">Firmware (application)</option>
-                    </select>
-                </div>
-                <div class="input-group">
-                    <label>Binary (.bin)</label>
-                    <input type="file" id="otaFile" accept=".bin,application/octet-stream">
-                </div>
-                <p id="otaFileName" class="ota-file-name"></p>
-                <div class="ota-progress" id="otaProgressWrap" style="display:none">
-                    <div class="ota-progress-bar" id="otaProgressBar"></div>
-                    <div class="ota-progress-label" id="otaProgressLabel">0%</div>
-                </div>
-                <div class="button-group" style="margin-top:1rem">
-                    <button class="btn-primary" id="otaUploadBtn" disabled>Upload</button>
-                </div>
-                <div class="ota-status" id="otaStatus"></div>
+              </div>
+              <div class="ota-steps" id="updSteps">
+                <div class="ota-step" data-step="dlfs"><span class="ota-step-num">1</span> Get UI</div>
+                <div class="ota-step" data-step="fs"><span class="ota-step-num">2</span> Flash UI</div>
+                <div class="ota-step" data-step="verify"><span class="ota-step-num">3</span> Verify</div>
+                <div class="ota-step" data-step="dlfw"><span class="ota-step-num">4</span> Get FW</div>
+                <div class="ota-step" data-step="fw"><span class="ota-step-num">5</span> Flash FW</div>
+                <div class="ota-step" data-step="reboot"><span class="ota-step-num">6</span> Reboot</div>
+              </div>
+              <div class="ota-progress" id="updProgressWrap" hidden>
+                <div class="ota-progress-bar" id="updProgressBar"></div>
+                <span class="ota-progress-label" id="updProgressLabel">0%</span>
+              </div>
+            </section>
+
+            <section class="card" id="otaWifiStaCard">
+              <h2>Home WiFi (Bridge Mode)</h2>
+              <p class="hint">Join the controller to your home or garage router; its own access point keeps running. Once it
+                shows <em>Connected</em>, put this phone on the same network, open the address shown and press
+                <strong>Check for updates</strong> again.</p>
+              <p class="status-line" id="otaWifiStaStatus">--</p>
+              <div class="ota-wifi-row">
+                <input type="text" id="otaWifiStaSsidInput" placeholder="Home network name" maxlength="32" autocomplete="off" spellcheck="false" list="otaWifiStaSsidList">
+                <datalist id="otaWifiStaSsidList"></datalist>
+                <button class="btn ota-icon" id="otaWifiStaScan" title="Scan for networks">&#128269;</button>
+              </div>
+              <div class="ota-wifi-row">
+                <input type="password" id="otaWifiStaPasswordInput" placeholder="Home network password (blank = open)" maxlength="64" autocomplete="new-password">
+                <button class="btn ota-icon" id="otaWifiStaPasswordToggle" title="Show / hide password">&#128065;</button>
+              </div>
+              <div class="ota-row">
+                <button class="btn" id="otaWifiStaSave">Save &amp; Apply</button>
+                <button class="btn" id="otaWifiStaReset">Disable</button>
+              </div>
+            </section>
+
+            <section class="card">
+              <h2>Update from Files</h2>
+              <p class="hint">No internet needed here. Download <code>littlefs.bin</code> and <code>firmware.bin</code> from the
+                newest <code>V…</code> folder under <code>Releases/</code> on GitHub, then upload them here:
+                <strong>Filesystem</strong> (littlefs.bin, the web interface) first, then <strong>Firmware</strong>
+                (firmware.bin). The device reboots once the firmware upload completes.</p>
+              <div class="ota-steps" id="otaSteps">
+                <div class="ota-step" data-step="filesystem"><span class="ota-step-num">1</span> Filesystem</div>
+                <div class="ota-step" data-step="firmware"><span class="ota-step-num">2</span> Firmware</div>
+              </div>
+              <label class="ota-field">Update Type
+                <select id="otaType">
+                  <option value="filesystem">Filesystem (web UI)</option>
+                  <option value="firmware">Firmware (application)</option>
+                </select>
+              </label>
+              <label class="ota-field">Binary (.bin)
+                <input id="otaBin" type="file" accept=".bin,application/octet-stream">
+              </label>
+              <div class="ota-progress" id="otaProgressWrap" hidden>
+                <div class="ota-progress-bar" id="otaProgressBar"></div>
+                <span class="ota-progress-label" id="otaProgressLabel">0%</span>
+              </div>
+              <div class="ota-row">
+                <button id="otaUploadBtn" class="btn primary">Upload</button>
+              </div>
+              <div id="otaStatus" class="status-line">Idle</div>
             </section>
         </div>
 
     </div>
 
-    <script src="app.js?v=speedpulser-4.01"></script>
+    <script src="app.js?v=%FW_VERSION%"></script>
+    <script src="ota.js?v=%FW_VERSION%"></script>
 </body>
 
 </html>
