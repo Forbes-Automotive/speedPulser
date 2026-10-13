@@ -1,7 +1,24 @@
 {
   "product": "SpeedPulser",
-  "latest": "4.02",
+  "latest": "5.01",
   "releases": [
+    {
+      "version": "5.01",
+      "channel": "stable",
+      "date": "2026-10-13",
+      "ota": true,
+      "notes": "V5 PCB support with drive calibration (up to 10 marks, slowest speeds now reachable), motor-rail read-back and Test Board; same firmware still runs legacy boards. Reverse Direction corrected (unticked is now the right way; the saved setting resets). Long press on a phone no longer highlights text.",
+      "firmware": {
+        "path": "V5.01/firmware.bin",
+        "size": 1268176,
+        "sha256": "54527f94120d0c02bf3ad2dc8f63565f3759f624b470c65fb41d141d30c31596"
+      },
+      "filesystem": {
+        "path": "V5.01/littlefs.bin",
+        "size": 655360,
+        "sha256": "58b06483e50f12de4865c1dc32f43bd2d6e10d07202e4a5439b60d37a9188f4c"
+      }
+    },
     {
       "version": "4.02",
       "channel": "stable",
@@ -15,8 +32,8 @@
       },
       "filesystem": {
         "path": "V4.02/littlefs.bin",
-        "size": 720896,
-        "sha256": "6818c806ee23bfafba77815c911f76b79f5b056ab3646ac3a7038caa3c760413"
+        "size": 655360,
+        "sha256": "84dde7e25bd044edece55ea8b9472c26f6eff01589501f94503fb45cb98d0f4d"
       }
     },
     {
