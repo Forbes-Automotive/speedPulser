@@ -4,9 +4,9 @@ The SpeedPulser converts digital speed pulses from a gearbox hall sensor (or a [
 
 It is based on a **LOLIN C3 Mini (ESP32-C3)** and uses a **TY3816B** BLDC motor driven via a native LEDC hardware PWM channel.
 
-![SpeedPulser Web UI — dashboard, configuration, limits & offset, PID feedback, status monitor, speed test, top-speed calibration and OTA](/Images/speedPulserUI.png)
+![SpeedPulser Web UI — dashboard, configuration, limits & offset, PID feedback, status monitor, speed test, drive calibration and OTA](/Images/speedPulserUI.png)
 
-![SpeedPulser Web UI — voltage control, calibration builder and export / import](/Images/speedPulserUI-2.png)
+![SpeedPulser Web UI — board test, voltage control, legacy calibration builder and export / import](/Images/speedPulserUI-2.png)
 
 ---
 
@@ -16,15 +16,19 @@ It is based on a **LOLIN C3 Mini (ESP32-C3)** and uses a **TY3816B** BLDC motor 
 |---|---|
 | Speed input | 5V / 12V square-wave (hall sensor or Can2Cluster) |
 | Motor output | 10 kHz hardware PWM, 12-bit resolution |
-| Closed-loop feedback | PID trims duty from the motor feedback pin (optional) |
+| One firmware, every board | A strap on GPIO3 is read at power-up: V4 / V5 boards get voltage control, older PWM-only boards run exactly as before |
+| Voltage control *(V4 / V5 PCB)* | One **drive** value (motor rail volts × PWM) runs the motor, so even the slowest speeds are reachable |
+| Drive calibration *(V5 PCB)* | Up to 10 needle marks captured on the car; running speeds are interpolated between them |
+| Board test *(V5 PCB)* | Motor-rail read-back on GPIO1; **Test Board** steps the rail to 5 / 7.5 / 10 V and checks each one |
+| Closed-loop feedback | PID trims duty from the motor feedback pin (optional); on a voltage board, one slow trim on the calibrated drive |
 | Calibration profiles | 18 built-in (VW, Ford, Fiat, Merc, Smiths, Opel, VW Bay) |
-| Custom calibration | Calibration Builder — capture, generate, save, export/import |
+| Custom calibration | Calibration Builder (legacy boards) — capture, generate, save, export/import |
 | Calibration Curve | Live duty-vs-speed curve with the current operating point on the Dashboard |
 | Status Monitor | Live measured speed, PID trim and actual motor speed (Hz) |
 | WiFi UI | Web app type interface |
 | Needle sweep | Configurable on power-up |
 | Speed offset | Global fixed offset **or** 5-point speed-dependent curve |
-| OTA updates | Firmware upload from the browser |
+| OTA updates | Update from GitHub or by file upload on the OTA tab; Home Wi‑Fi bridge mode; recovery page if the web UI is ever lost |
 | Power management | Auto WiFi-off + CPU scaling after 1 min idle |
 | Remembers settings | All settings stored to ESP32 Preferences (NVS/EEPROM) |
 
@@ -144,7 +148,7 @@ Take time here — good fitment minimises noise and extends coupler life.
 
 Connect to the **`SpeedPulser`** WiFi access point (open network) and navigate to **`192.168.1.1`** or **`speedpulser.local`** in a browser.
 
-The interface is a single-page app served from the ESP32's LittleFS flash partition, built on Forbes Automotive's shared dark theme (the same look used across OpenHaldex, Can2Cluster, SpeedPulserPro, can2rpm, the MQB Steering Wheel Controller and AirLift Controller). Settings are applied in real time and saved to EEPROM automatically every 2 seconds. Current firmware version: **4.01**.
+The interface is a single-page app served from the ESP32's LittleFS flash partition, built on Forbes Automotive's shared dark theme (the same look used across OpenHaldex, Can2Cluster, SpeedPulserPro, can2rpm, the MQB Steering Wheel Controller and AirLift Controller). Settings are applied in real time and saved to EEPROM automatically every 2 seconds. A long press on a phone doesn't highlight text (text boxes can still be selected). Current firmware version: **5.01**.
 
 **Status colours:** most tiles use plain text rather than colour, but a per-tile dial gauge (Incoming Speed / Motor Duty) turns **orange/amber** whenever **Speed Test Mode** or **Calibration Mode** is driving the motor — a reminder that the value shown is a synthetic test value, not a live vehicle reading. A missing motor-feedback signal (legacy PCBs without the feedback circuit) shows as plain **N/A** rather than a coloured warning.
 
@@ -199,35 +203,43 @@ While **Speed Test Mode** is active, these fields switch to show the chosen test
 
 | Setting | Description |
 |---|---|
+| Board Type / Board Test | Which board this is (read from the GPIO3 strap at power-up) and the result of the last **Test Board** |
+| Motor Rail *(V5 PCB)* | The motor supply voltage, read back on GPIO1 |
+| Test Board *(V5 PCB)* | Stops the motor for a few seconds, steps the rail to 5, 7.5 and 10 V and reads each back. A pass proves the voltage injection and the rail sense, and stores this board's own voltage line. Run it once on a new board, on a 12 V+ supply |
 | Reverse Direction | Drive the direction pin HIGH to flip the motor direction |
-| Feedback Enable | Turn the closed-loop PID duty trim on or off (**not available on legacy PCBs**) |
+| Feedback Enable | Turn the closed-loop feedback trim on or off (**not available on legacy PCBs**) |
 | Min Feedback Speed (km/h) | Below this speed the loop runs open-loop (feed-forward only) to stop low-speed hunting; 0 = always closed-loop |
-| PID Kp / Ki / Kd | Feedback loop gains (defaults 0.15 / 1.3 / 0) |
+| PID Kp / Ki / Kd | Feedback loop gains (defaults 0.15 / 1.3 / 0); used on legacy boards and with Voltage Control off |
 | PID Deadband (Hz) | Feedback error (in Hz) ignored by the loop, to stop the needle dithering |
 | Reset PID Defaults | Restore the tuned default gains |
-| Voltage Control *(V4 PCB only)* | Enable the closed-loop **buck-converter voltage** trim and set its nominal / minimum PWM, voltage range, trim gain and loop gains |
+| Voltage Control *(V4 / V5 PCB)* | Enable the **drive** control (rail volts × PWM) and set Nominal PWM, Maximum Rail, Feedback Trim Gain and Feedback Trim Limit |
 | Performance Array Value | Index of the active calibration array |
 | Incoming Pulses | Raw frequency value from the ISR |
 | Raw Count | Number of samples accumulated so far |
 | LED Counter | ISR pulse counter (also drives the onboard LED blink) |
+| Rail Set / Rail Measured (V) | The motor rail the firmware asked for, and what GPIO1 reads back |
 
 <p align="center">
-  <img src="/Images/ui-advanced.png" alt="Advanced tab — motor direction, feedback enable, min feedback speed, PID gains and deadband" width="300">
+  <img src="/Images/ui-board.png" alt="Advanced tab — Board card: board type, board test result, motor rail, the 5 / 7.5 / 10 V test steps and the Test Board button" width="300">
   &nbsp;&nbsp;
-  <img src="/Images/ui-status.png" alt="Advanced tab — live status monitor: performance array, incoming pulses, raw count, LED counter, measured speed / frequency, PID trim, buck state, voltage command and PWM fraction" width="300">
+  <img src="/Images/ui-advanced.png" alt="Advanced tab — motor direction, feedback enable, min feedback speed, PID gains and deadband" width="300">
 </p>
-> **Reverse Direction** drives GPIO 10 HIGH instead of LOW, flipping the rotation direction for clusters whose motor is mounted the opposite way round.
-> **Feedback Enable** turns the closed-loop PID trim on; the sliders below it tune the loop and **Reset PID Defaults** restores the tuned baseline (0.15 / 1.3 / 0). See [Closed-Loop Feedback (PID)](#closed-loop-feedback-pid) below for how it works.
+<p align="center">
+  <img src="/Images/ui-status.png" alt="Advanced tab — live status monitor: performance array, incoming pulses, raw count, LED counter, measured speed / frequency, PID trim, buck state, rail set / measured and PWM fraction" width="300">
+</p>
 
-On a **V4 PCB** the Advanced tab also shows **Voltage Control**. This is a mid-ranging scheme: the fast PID loop above trims PWM duty to hit the target speed, while a slow loop nudges the buck-converter voltage so the PWM stays near its **Nominal PWM** working point (between the **Minimum / Maximum Voltage** limits). Turn it off to fall back to fixed full-voltage PWM, i.e. legacy behaviour.
+> **Reverse Direction** drives GPIO 10 HIGH instead of LOW, flipping the rotation direction for clusters whose motor is mounted the opposite way round. **From V5.01 unticked (LOW) is the normal direction on every board.** Earlier firmware had this backwards, so updating to V5.01 resets the setting to unticked: if you had ticked Reverse to make the needle run the right way, leave it unticked now.
+> **Feedback Enable** turns the closed-loop trim on; the sliders below it tune the loop and **Reset PID Defaults** restores the tuned baseline (0.15 / 1.3 / 0). See [Closed-Loop Feedback (PID)](#closed-loop-feedback-pid) below for how it works.
+
+On a **V4 / V5 PCB** the Advanced tab also shows **Voltage Control**. The motor is driven with one **drive** value: motor rail volts × PWM. Above *3.0 V × Nominal PWM* the PWM stays at Nominal and only the rail moves, which keeps low speeds smooth; below that the rail stays at its 3.0 V minimum and the PWM falls to zero, so the drive reaches all the way down to a stopped needle. Running speeds come from the marks captured in **Drive Calibration**. **Maximum Rail** caps the motor supply (up to 12 V). Untick Voltage Control to fall back to the fixed 9 V rail and the PWM presets, i.e. legacy behaviour. Changing these settings after calibrating moves the needle, so recapture the marks.
 
 <p align="center">
-  <img src="/Images/ui-voltage-control.png" alt="Advanced tab — Voltage Control card: enable, nominal and minimum PWM, minimum / maximum voltage, trim gain and PWM loop gains" width="300">
+  <img src="/Images/ui-voltage-control.png" alt="Advanced tab — Voltage Control card: enable, Nominal PWM, Maximum Rail, Feedback Trim Gain and Feedback Trim Limit" width="300">
 </p>
 
 ### Calibration Tab
 
-Contains **Speed Test Mode**, **Export / Import** and — depending on the board — either the **Top Speed Calibration** card (V4 PCB, which can lift the motor supply voltage) or the multi-point **Calibration Builder** (earlier PCBs).
+Contains **Speed Test Mode**, **Export / Import** and — depending on the board — either the **Drive Calibration** card (voltage boards with Voltage Control on) or the multi-point **Calibration Builder** (earlier PCBs, or Voltage Control off).
 
 **Speed Test Mode**  
 Locks the motor to a user-chosen speed so the cluster can be observed
@@ -236,19 +248,28 @@ calibration process, to give a realistic preview. With feedback enabled the clos
 loop drives to that speed; the dashboard updates in real time to show the chosen speed
 and the resulting motor duty.
 
-**Top Speed Calibration** *(V4 PCB)*  
-Tick **Enable Calibration Mode**, then raise **Voltage Lift** and/or **PWM Duty** until the
-needle sits exactly on the top-speed mark (the Maximum Speed set on the Configuration tab)
-and press **Capture Top Speed**. Every lower speed then scales linearly from that single
-point; the low cut-off is **Min Feedback Speed** on the Advanced tab.
+**Drive Calibration** *(voltage boards)*  
+
+1. Run **Test Board** on the Advanced tab once (the card shows its result).
+2. Tick **Enable Calibration Mode**. The motor starts stopped.
+3. Raise the **Drive** (the −0.5 … +0.5 buttons or the slider) until the needle sits exactly on a
+   mark, wait for **Steady**, type the speed the needle shows and press **Capture Mark**.
+4. Capture a low mark (e.g. 20), the top mark and a few in between, up to 10. Running speeds
+   are interpolated between the marks, so more marks means a closer needle; nothing runs
+   past the top mark.
+
+Each mark stores the speed, motor tacho Hz, drive, rail and PWM, and the read-outs show them
+live while you set it up. *Steady* waits for the tacho to stop drifting, so low-speed motor
+cogging doesn't block a capture. A mark can be removed with its ✕, or all of them with
+**Clear All Marks**. A V5.00 top-speed point is carried over as the first mark.
 
 <p align="center">
   <img src="/Images/ui-speed-test.png" alt="Calibration tab — Speed Test Mode with enable and test speed slider" width="300">
   &nbsp;&nbsp;
-  <img src="/Images/ui-top-speed.png" alt="Calibration tab — Top Speed Calibration (V4): calibration mode, voltage lift, PWM duty and Capture Top Speed" width="300">
+  <img src="/Images/ui-drive-cal.png" alt="Calibration tab — Drive Calibration: steps, calibration mode, drive buttons and slider, Capture Mark, live drive / rail / PWM / motor Hz read-outs and the captured marks table" width="300">
 </p>
 
-**Calibration Builder** *(earlier PCBs)*  
+**Calibration Builder** *(earlier PCBs, or Voltage Control off)*  
 
 1. Tick **Enable Calibration Mode** — the motor now follows the big duty read-out instead
    of the speed source.
@@ -260,10 +281,12 @@ point; the low cut-off is **Min Feedback Speed** on the Advanced tab.
    live and **Save to Device** to store it.
 
 **Export / Import**  
-**Export Text** saves the active calibration as a `.txt` you can share or back up and
-**Import Text** loads one back and applies it. **Export C-Array** writes a paste-ready
-firmware preset (a `motorPerformanceN[]` table plus its `calibrationProfiles[]` line) for
-building a calibration in permanently.
+**Export Voltage Cal** *(voltage boards)* saves the Drive Calibration marks plus the Nominal
+PWM and Maximum Rail they were captured with. **Export PWM Cal** saves the Calibration Builder
+calibration. Each file is tagged with its type, and the one **Import Text** button loads
+whichever kind it is and applies it. **Export PWM C-Array** writes a paste-ready firmware preset
+(a `motorPerformanceN[]` table plus its `calibrationProfiles[]` line) for building a
+calibration in permanently.
 
 <p align="center">
   <img src="/Images/ui-calibration.png" alt="Calibration tab — Calibration Builder: calibration mode, duty jog buttons, target speed grid, capture point, name, Generate & Apply and Save to Device" width="300">
@@ -274,9 +297,9 @@ building a calibration in permanently.
 
 ### OTA Tab
 
-Upload a new compiled `.bin` firmware file directly from the browser — no USB cable required. Two steps: the **Filesystem** image (`littlefs.bin`, the web UI) first, then the **Firmware** image (`firmware.bin`); the step tracker marks each as it completes and the device reboots automatically after the firmware step. See [Over-the-Air Updates](#over-the-air-updates-two-step).
+Three cards: **Update from GitHub** (check, pick a version, install in six tracked steps), **Home WiFi (Bridge Mode)** (join your router so the phone has internet and the controller at once) and **Update from Files** (`littlefs.bin` then `firmware.bin`, no internet needed). See [Over-the-Air Updates](#over-the-air-updates).
 
-<p align="center"><img src="/Images/ui-ota.png" alt="OTA tab — firmware info and the two-step filesystem / firmware uploader" width="300"></p>
+<p align="center"><img src="/Images/ui-ota.png" alt="OTA tab — Update from GitHub, Home WiFi bridge mode and Update from Files" width="300"></p>
 
 ---
 
@@ -304,6 +327,12 @@ cluster combination; the integral term carries most of the correction. Adjust fr
 Advanced tab if needed, and use **Reset PID Defaults** to return to the tuned values.
 The Status Monitor shows the live measured speed, the PID trim being applied and the raw
 tacho frequency so you can see the loop working.
+
+**On a voltage board** (Voltage Control on) the PID gains aren't used. Instead, one slow trim
+nudges the calibrated drive to hold the motor speed captured for each mark. It only works
+with Feedback Enable on, a working tacho, above Min Feedback Speed and outside the PID
+Deadband, and it can never move the drive by more than **Feedback Trim Limit** (default
+±20 %), so it can't fight the calibration. **Feedback Trim Gain** sets how quickly it acts.
 
 ---
 
@@ -411,22 +440,15 @@ As soon as a device reconnects to the WiFi AP, full power is restored automatica
 
 ---
 
-## Over-the-Air Updates (Two-Step)
+## Over-the-Air Updates
 
-New firmware can be flashed without removing the unit from the vehicle. Firmware and the web UI live on separate flash partitions, so updating is a **two-step process** using the shared `ota_manager` module:
+Everything happens on the **OTA** tab; USB is only needed for the very first install, or if the web interface is ever lost.
 
-1. **Filesystem** — in the **OTA** tab, select **Filesystem (web UI)** and upload `littlefs.bin` (`POST /api/ota/fs`, written to the SPIFFS partition). This updates `index.html` / `app.js` / `style.css`; the device does **not** reboot after this step, so you can go straight on to step 2.
-2. **Firmware** — select **Firmware (application)** and upload `firmware.bin` (`POST /api/ota`, written to the OTA app partition). The device reboots automatically once this completes.
+- **Update from GitHub** — press **Check for updates**. The page reads the release list from [`Forbes-Automotive/speedPulser`](https://github.com/Forbes-Automotive/speedPulser) (`Releases/releases.json` plus the `V…` folders), shows *Installed* vs. *Latest* (older and beta releases sit behind a tick-box, for rolling back), then installs the selected version in six tracked steps: download and flash the web UI, verify it, download and flash the firmware, reboot. The browser needs internet *while it can still reach the controller* — join the controller to your router in the **Home WiFi (Bridge Mode)** card, put the phone on the same network and open the address the card shows (`http://speedpulser.local/` works there too). On the controller's own access point alone most phones drop mobile data.
+- **Home WiFi (Bridge Mode)** — the controller joins a home or garage network as a station alongside its own access point. Scan or type the network name, save, and once it shows *Connected* the controller is reachable from that network as well. It tries hard for 20 s after boot, then once every 5 minutes, so a saved network can't disturb the access point when the car is parked away from home.
+- **Update from Files** — no internet needed: download `littlefs.bin` and `firmware.bin` from the newest `Releases/V…/` folder and upload them here, **Filesystem** (web UI) first, then **Firmware**. The device reboots after the firmware.
 
-Steps in full:
-
-1. Build the project in PlatformIO → locate `firmware.bin` in `.pio/build/lolin_c3_mini/` and `littlefs.bin` under the filesystem build output.
-2. Connect to the `SpeedPulser` WiFi AP (or `speedpulser.local`).
-3. Open the **OTA** tab in the browser.
-4. Upload the filesystem image first, then the firmware image.
-5. The device flashes and reboots automatically after the firmware step.
-
-`GET /api/ota/info` reports the running version, board and hardware.
+Every upload is size-checked, and a filesystem image is verified by mounting it before the device reports success — a failed filesystem upload is wiped rather than left half-written. If the web interface is ever missing (a filesystem update that stopped part-way), the controller serves a **recovery page** at its address with the same two uploads and partition diagnostics, so it is never a USB job. Web assets are served `no-cache`, so a new UI is never hidden behind a stale copy in the phone's browser. `GET /api/ota/info` reports the firmware and web UI versions shown at the top of the tab; `GET /api/ota/check` gates updates on the device being in a safe state.
 
 ---
 
@@ -436,9 +458,13 @@ Steps in full:
 
 | GPIO | Function |
 |---|---|
+| 1 | Motor rail read-back, V_MOT_SENSE (V5 PCB; 39k / 10k divider) |
 | 2 | Motor PWM output (LEDC 12-bit, stepped to 5 V via NPN transistor) |
-| 4 | Motor tacho feedback input (falling-edge interrupt counter; used by the PID loop) |
+| 3 | Board strap, read at power-up (1k to GND = voltage board, open = legacy PWM-only board) |
+| 4 | Motor tacho feedback input (falling-edge interrupt counter; used by the feedback loop) |
 | 5 | Speed pulse input (falling-edge interrupt) |
+| 6 | V_ADJ: PWM "DAC" into the motor buck converter's feedback (V4 / V5 PCB; higher V_ADJ = lower rail) |
+| 7 | EN_ADJ: motor buck converter enable (V4 / V5 PCB) |
 | 8 | Onboard LED (blinks to confirm incoming pulses) |
 | 10 | Motor direction (LOW = normal, HIGH = reversed) |
 
@@ -484,7 +510,7 @@ Platform: `pioarduino/platform-espressif32` (Arduino-ESP32 3.x / ESP-IDF 5.x)
 5. **Build & Upload** — flashes the main firmware.
 6. Open the Serial Monitor at 115 200 baud to confirm startup messages.
 
-> Serial debug output is controlled by `-D serialDebug=1` in `platformio.ini`. Set to `0` for production builds to avoid stalling if no USB-CDC host is connected.
+> Serial debug output is controlled by `-D enableDebug=1` in `platformio.ini`. Set to `0` for production builds to avoid stalling if no USB-CDC host is connected.
 
 ---
 
@@ -513,3 +539,8 @@ Platform: `pioarduino/platform-espressif32` (Arduino-ESP32 3.x / ESP-IDF 5.x)
 | V3.02 | Smoother needle sweep | 
 | V3.0x | Various multiple tweaks |
 | V3.10 | Tighter PID control, feedback check for legacy PCBs etc |
+| V4.00 | Hardware voltage control (V4 PCB): one firmware for legacy and V4 boards, auto-detected from the GPIO3 strap |
+| V4.01 | Shared Forbes Automotive UI theme; common WiFi and OTA modules |
+| V4.02 | OTA overhaul: update from GitHub, Home WiFi bridge mode, recovery page |
+| V5.00 | V5 PCB: motor-rail read-back, Test Board, top-speed calibration by rail voltage |
+| V5.01 | Drive calibration (up to 10 marks, slowest speeds reachable), one slow feedback trim, Reverse Direction corrected (unticked = normal; resets on update), voltage cal export / import, long press on a phone no longer highlights text |
