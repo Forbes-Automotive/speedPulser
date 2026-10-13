@@ -17,7 +17,7 @@ function initApp() {
   initCollapsibleCards();
   initGaugeUI();
   initCalBuilder();
-  fetchCalibrations().then(fetchSettings).then(refreshCalState).then(fetchCalCurve);  // options, settings, cal builder, curve
+  fetchCalibrations().then(fetchSettings).then(refreshCalState).then(fetchCalCurve).then(fetchBoardTest);  // options, settings, cal builder, curve, board test
   startStatusPolling();
   window.addEventListener('resize', scheduleCalDraw);
 }
@@ -166,8 +166,10 @@ function initControls() {
         const ctrlPromise = pushControl(id, value);
 
         if (id === 'motorCalSelection') {
+          // With voltage control on the preset isn't what drives the motor, so the
+          // banner keeps saying "Voltage" (the device reports it on the next poll).
           const selectedOption = el.options[el.selectedIndex];
-          if (selectedOption) {
+          if (selectedOption && !calModeVoltage) {
             document.getElementById('calibrationStatus').textContent = `Cal: ${selectedOption.textContent}`;
           }
           // Refresh the curve only after the device has applied the new cal.
@@ -335,34 +337,195 @@ function initControls() {
 }
 
 
-// ===== VOLTAGE CONTROL (V4 board) =====
+/// ===== VOLTAGE CONTROL (voltage-injection board) =====
+// The motor is driven with one number, the DRIVE in volts (rail x PWM). The
+// firmware lowers the rail first and only drops the PWM below the 3 V floor, so
+// the drive runs from 0 (stopped) to Maximum Rail. Calibration captures needle
+// marks against drive; running interpolates between them.
+let railFloorV = 3.0;
+let railCeilV = 12.0;
+let driveMaxV = 12.0;
+let calDriveV = 0;                // calibration drive the UI last asked for (V)
+let calDriveTouchedMs = 0;        // last local change — don't let a status poll fight the user
+let calDriveDragging = false;
+let calDriveInFlight = false;     // a tempDriveV POST is outstanding
+let calDrivePending = false;      // the drive moved again while it was outstanding
+let calSpeedTouched = false;      // user has typed a speed: stop overwriting it
+let boardTestWasRunning = false;
+let boardTestPollTimer = null;
+let clusterUnit = 'km/h';
+
 // Set a slider's value and its live "-display" span in one call.
 function setSlider(id, val) {
   const el = document.getElementById(id);
   if (!el) return;
   el.value = val;
-  updateSliderDisplay(id, val);
+  updateVcSliderDisplay(id, val);
 }
 
-// Show the V4 voltage-control cards on new boards, and the legacy multi-point
-// Calibration Builder only on boards without voltage control.
-function applyBoardVisibility(isV4) {
+function updateVcSliderDisplay(id, val) {
+  const v = Number(val);
+  if (id === 'vcPwmNominal') updateSliderDisplay(id, Math.round(v * 100) + '%');
+  else if (id === 'vcTrimLimit') updateSliderDisplay(id, '±' + Math.round(v * 100) + '%');
+  else if (id === 'vcRailMaxV') updateSliderDisplay(id, v.toFixed(1) + ' V');
+  else updateSliderDisplay(id, val);
+}
+
+function setDriveMax(v) {
+  if (!(Number(v) > 0)) return;
+  driveMaxV = Number(v);
+  const el = document.getElementById('vcDriveV');
+  if (el) el.max = driveMaxV;
+}
+
+function setCalDrive(v, push) {
+  v = Math.min(driveMaxV, Math.max(0, Number(v) || 0));
+  calDriveV = Math.round(v * 100) / 100;
+  const el = document.getElementById('vcDriveV');
+  if (el) el.value = calDriveV;
+  updateSliderDisplay('vcDriveV', calDriveV.toFixed(2) + ' V');
+  if (push) {
+    calDriveTouchedMs = Date.now();
+    sendCalDrive();
+  }
+}
+
+// One POST in flight at a time, always carrying the latest value. A slider drag
+// fires dozens of input events; posting each one swamps the device and lets them
+// land out of order.
+function sendCalDrive() {
+  if (calDriveInFlight) { calDrivePending = true; return; }
+  calDriveInFlight = true;
+  calDrivePending = false;
+  pushControl('tempDriveV', calDriveV.toFixed(2)).finally(() => {
+    calDriveInFlight = false;
+    calDriveTouchedMs = Date.now();
+    if (calDrivePending) sendCalDrive();
+  });
+}
+
+// Show the voltage-board cards on new boards, and the legacy multi-point
+// Calibration Builder only when no voltage injection is fitted.
+function applyBoardVisibility(isVc) {
   const show = (id, on) => {
     const el = document.getElementById(id);
     if (el) el.style.display = on ? '' : 'none';
   };
-  show('voltageCalCard', isV4);
-  show('voltageControlCard', isV4);
-  show('calBuilderCard', !isV4);
-  boardHasVc = isV4;
-  updateDashChartChrome(isV4);
+  show('voltageCalCard', isVc);
+  show('voltageControlCard', isVc);
+  show('calBuilderCard', !isVc);
+  document.querySelectorAll('.vc-only').forEach((el) => { el.style.display = isVc ? '' : 'none'; });
+  const typeEl = document.getElementById('boardTypeVal');
+  if (typeEl) typeEl.textContent = isVc ? 'Voltage injection (V5)' : 'Legacy (PWM only)';
+  boardHasVc = isVc;
+  updateDashChartChrome(isVc);
   scheduleCalDraw();
+}
+
+function boardTestPillState(code, running) {
+  if (running) return { cls: 'warn', text: 'Testing…' };
+  switch (Number(code)) {
+    case 1: return { cls: 'ok', text: 'Pass' };
+    case 2: return { cls: '', text: 'N/A' };
+    case 3: case 4: case 5: return { cls: 'bad', text: 'Fail' };
+    default: return { cls: 'warn', text: 'Not run' };
+  }
+}
+
+function renderBoardTestPills(code, running) {
+  const st = boardTestPillState(code, running);
+  ['boardTestPill', 'vcCalBoardPill'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'pill' + (st.cls ? ' ' + st.cls : '');
+    el.textContent = st.text;
+  });
+}
+
+async function fetchBoardTest() {
+  try {
+    const r = await fetch('/api/boardtest');
+    const d = await r.json();
+    renderBoardTestPills(d.code, d.running);
+    const txt = document.getElementById('boardTestText');
+    if (txt) txt.textContent = d.running ? 'Testing: motor stopped, stepping the rail…' : (d.text || '--');
+    const rows = document.getElementById('boardTestRows');
+    if (rows && Array.isArray(d.points)) {
+      const ran = Number(d.code) >= 1 && Number(d.code) !== 2;
+      rows.innerHTML = d.points.map((p, i) =>
+        '<tr><td>' + (i + 1) + '</td><td>' + Number(p.target).toFixed(1) + ' V</td><td>' +
+        (ran ? Number(p.measured).toFixed(2) + ' V' : '--') + '</td></tr>').join('');
+    }
+    const btn = document.getElementById('boardTestBtn');
+    if (btn) btn.disabled = !!d.running;
+    return d;
+  } catch (e) {
+    console.log('Error fetching board test:', e);
+    return null;
+  }
+}
+
+// Poll quickly while a test runs, then report the result once.
+function pollBoardTest() {
+  if (boardTestPollTimer) clearTimeout(boardTestPollTimer);
+  const tick = async () => {
+    const d = await fetchBoardTest();
+    if (d && d.running) {
+      boardTestPollTimer = setTimeout(tick, 500);
+      return;
+    }
+    boardTestPollTimer = null;
+    if (d) showNotification(d.text || 'Board test finished', d.pass ? 'success' : 'error');
+    fetchSettings();
+  };
+  boardTestPollTimer = setTimeout(tick, 500);
+}
+
+// The captured marks: speed | tacho Hz | drive (rail x PWM) | delete.
+function renderDriveCal(points, hzOk) {
+  points = Array.isArray(points) ? points : [];
+  const rows = document.getElementById('vcCalRows');
+  if (rows) {
+    rows.innerHTML = points.length ? points.map((p, i) =>
+      '<tr><td>' + p.speed + ' ' + clusterUnit + '</td>' +
+      '<td>' + (Number(p.hz) > 0 ? Number(p.hz).toFixed(1) : '--') + '</td>' +
+      '<td>' + Number(p.drive).toFixed(2) + ' V</td>' +
+      '<td class="muted">' + Number(p.rail).toFixed(1) + ' V × ' + Math.round(Number(p.pwm) * 100) + '%</td>' +
+      '<td><button class="stepper-btn" data-del="' + i + '" title="Delete this mark">✕</button></td></tr>'
+    ).join('') : '<tr><td colspan="5" class="muted">No marks captured yet.</td></tr>';
+  }
+  const res = document.getElementById('vcCalResult');
+  if (res) {
+    if (!points.length) {
+      res.textContent = 'Not calibrated. Capture a low mark and the top mark at least.';
+    } else {
+      let t = points.length + (points.length === 1 ? ' mark' : ' marks') + ', ' +
+        points[0].speed + '–' + points[points.length - 1].speed + ' ' + clusterUnit + '.';
+      if (points.length === 1) t += ' Add a low mark too: one mark assumes the dial is linear to zero.';
+      if (!hzOk) t += ' No tacho readings, so Measured Speed and the feedback trim are off.';
+      res.textContent = t;
+    }
+  }
+}
+
+async function vcAction(body) {
+  try {
+    const r = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const d = await r.json().catch(() => ({}));
+    return { ok: r.ok, data: d };
+  } catch (e) {
+    return { ok: false, data: { error: 'Device not reachable' } };
+  }
 }
 
 function initVoltageControls() {
   // Tuning sliders / toggle that map 1:1 to firmware control keys.
-  const vcInputs = ['voltageControlEnable', 'vcPwmNominal', 'vcPwmMin', 'vcVoltMin',
-                    'vcVoltMax', 'vcVoltGain', 'vcKp', 'vcKi', 'vcKd'];
+  const vcInputs = ['voltageControlEnable', 'vcPwmNominal', 'vcRailMaxV',
+                    'vcTrimGain', 'vcTrimLimit'];
   vcInputs.forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -372,57 +535,165 @@ function initVoltageControls() {
     });
     if (el.type === 'range') {
       el.addEventListener('input', () => {
-        updateSliderDisplay(id, el.value);
-        pushControl(id, el.value);
+        updateVcSliderDisplay(id, el.value);
+        if (id === 'vcRailMaxV') setDriveMax(el.value);
       });
     }
   });
 
-  // Voltage lift is shown as 0–100 % but the firmware wants a 0..1 fraction.
-  const voltEl = document.getElementById('tempVoltageCmd');
-  if (voltEl) {
-    voltEl.addEventListener('input', () => {
-      updateSliderDisplay('tempVoltageCmd', voltEl.value);
-      pushControl('tempVoltageCmd', (Number(voltEl.value) / 100).toFixed(3));
+  // Board test (Advanced page)
+  const btBtn = document.getElementById('boardTestBtn');
+  if (btBtn) {
+    btBtn.addEventListener('click', async () => {
+      const r = await vcAction({ action: 'boardTest' });
+      if (r.ok) {
+        renderBoardTestPills(0, true);
+        btBtn.disabled = true;
+        pollBoardTest();
+      } else {
+        showNotification(r.data.error || 'Board test could not start', 'error');
+      }
     });
   }
 
-  // PWM duty drives tempDutyCycle through the cal builder's setDuty op.
-  const dutyEl = document.getElementById('vcDuty');
-  if (dutyEl) {
-    dutyEl.addEventListener('input', () => {
-      updateSliderDisplay('vcDuty', dutyEl.value);
-      calPost({ op: 'setDuty', duty: Number(dutyEl.value) }).catch(() => {});
-    });
-  }
-
-  // V4 calibration-mode toggle mirrors the legacy testCal flag.
+  // Calibration-mode toggle mirrors the legacy testCal flag.
   const vcCal = document.getElementById('vcTestCal');
   if (vcCal) {
-    vcCal.addEventListener('change', () => pushControl('testCal', vcCal.checked));
+    vcCal.addEventListener('change', () => {
+      pushControl('testCal', vcCal.checked);
+      const legacy = document.getElementById('testCal');
+      if (legacy) legacy.checked = vcCal.checked;
+      if (vcCal.checked) setCalDrive(0, false); // firmware restarts with the motor stopped
+    });
   }
 
-  const captureBtn = document.getElementById('captureTopSpeedBtn');
+  // Drive: -/+ jog buttons and a slider, both in volts.
+  document.querySelectorAll('[data-djog]').forEach((btn) => {
+    btn.addEventListener('click', () => setCalDrive(calDriveV + Number(btn.dataset.djog), true));
+  });
+  const driveEl = document.getElementById('vcDriveV');
+  if (driveEl) {
+    driveEl.addEventListener('pointerdown', () => { calDriveDragging = true; });
+    window.addEventListener('pointerup', () => { calDriveDragging = false; });
+    window.addEventListener('pointercancel', () => { calDriveDragging = false; });
+    driveEl.addEventListener('input', () => setCalDrive(driveEl.value, true));
+  }
+
+  const speedEl = document.getElementById('vcCalSpeed');
+  if (speedEl) speedEl.addEventListener('input', () => { calSpeedTouched = true; });
+
+  const captureBtn = document.getElementById('captureMarkBtn');
   if (captureBtn) {
-    captureBtn.addEventListener('click', () => {
-      fetch('/api/action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'captureTopSpeed' })
-      }).then(async (r) => {
-        if (r.ok) {
-          showNotification('Top speed captured');
-          fetchSettings();
-          fetchCalCurve();
-        } else {
-          const e = await r.json().catch(() => ({}));
-          showNotification(e.error || 'Capture failed — raise voltage/PWM', 'error');
-        }
-      }).catch(() => showNotification('Capture failed', 'error'));
+    captureBtn.addEventListener('click', async () => {
+      const speed = Number(speedEl ? speedEl.value : 0);
+      if (!(speed >= 1 && speed <= 400)) {
+        showNotification('Enter the speed the needle is showing (1-400)', 'error');
+        return;
+      }
+      const r = await vcAction({ action: 'calAddPoint', speed });
+      if (r.ok) {
+        renderDriveCal(r.data.driveCal, r.data.driveCalHz);
+        showNotification('Captured ' + speed + ' ' + clusterUnit + ' at ' + calDriveV.toFixed(2) + ' V drive');
+      } else {
+        showNotification(r.data.error || 'Capture failed', 'error');
+      }
+    });
+  }
+
+  const rows = document.getElementById('vcCalRows');
+  if (rows) {
+    rows.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-del]');
+      if (!btn) return;
+      const r = await vcAction({ action: 'calDeletePoint', index: Number(btn.dataset.del) });
+      if (r.ok) renderDriveCal(r.data.driveCal, r.data.driveCalHz);
+      else showNotification(r.data.error || 'Delete failed', 'error');
+    });
+  }
+
+  const clearBtn = document.getElementById('clearMarksBtn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      if (!confirm('Delete every captured mark?')) return;
+      const r = await vcAction({ action: 'calClearPoints' });
+      if (r.ok) { renderDriveCal(r.data.driveCal, r.data.driveCalHz); showNotification('Marks cleared'); }
+      else showNotification(r.data.error || 'Clear failed', 'error');
     });
   }
 }
 
+// Live voltage-board read-outs from /api/status and /api/test-status.
+function updateVoltageReadouts(data) {
+  const setTxt = (id, v, cls) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = v;
+    if (cls !== undefined) {
+      el.classList.remove('ok', 'warn');
+      if (cls) el.classList.add(cls);
+    }
+  };
+  const fmtV = (v) => (v === undefined || v === null) ? '--' : Number(v).toFixed(2) + ' V';
+  const spread = Number(data.fbHzSpread);
+  const turning = spread >= 0;
+
+  // Measured rail is only trusted once Test Board has passed.
+  const measCls = data.railSenseOk ? '' : 'warn';
+  setTxt('voltageCmdVal', data.railCmdV !== undefined ? Number(data.railCmdV).toFixed(2) : '--');
+  setTxt('railMeasVal', data.motorRailV !== undefined ? Number(data.motorRailV).toFixed(2) : '--', measCls);
+  setTxt('boardRailVal', fmtV(data.motorRailV), measCls);
+
+  setTxt('vcCalDrive', fmtV(data.driveV));
+  setTxt('vcCalSetV', fmtV(data.railCmdV));
+  setTxt('vcCalMeasV', fmtV(data.motorRailV), measCls);
+  setTxt('vcCalPwm', data.pwmFrac !== undefined ? Math.round(Number(data.pwmFrac) * 100) + '%' : '--');
+  setTxt('vcCalHz', data.measuredFreqHz !== undefined ? Number(data.measuredFreqHz).toFixed(1) : '--');
+  // Not steady = the average is still moving: show by how much (Hz across ~1 s).
+  const drift = Number(data.fbHzDrift) || 0;
+  setTxt('vcCalSteady', turning ? (data.fbStable ? 'Steady' : 'Settling ' + (drift >= 0 ? '+' : '') + drift.toFixed(1) + ' Hz') : 'Stopped',
+         turning ? (data.fbStable ? 'ok' : 'warn') : '');
+  if (data.driveMaxV !== undefined) setDriveMax(data.driveMaxV);
+
+  // Calibration hint: one line, fixed height, so nothing below it moves.
+  const warn = document.getElementById('vcCalWarn');
+  if (warn) {
+    let msg = '';
+    if (data.testCal) {
+      if (data.railLimited) msg = 'The rail can’t reach the set voltage: supply too low, or the motor is overloaded.';
+      else if (!turning) msg = 'Motor stopped. Raise the drive until the needle moves.';
+      else if (!data.fbStable) msg = 'Motor speed still settling. Wait for “Steady” before capturing.';
+      else msg = 'Steady. Enter the speed the needle shows and capture it.';
+    }
+    warn.textContent = msg || ' ';
+  }
+
+  // Keep the drive control in step with the firmware (e.g. after Calibration
+  // Mode restarts it at 0) unless the user is adjusting it.
+  if (data.tempDriveV !== undefined && !calDriveDragging && !calDriveInFlight && !calDrivePending &&
+      Date.now() - calDriveTouchedMs > 1000) {
+    if (Math.abs(Number(data.tempDriveV) - calDriveV) > 0.005) setCalDrive(data.tempDriveV, false);
+  }
+  const vcCalEl = document.getElementById('vcTestCal');
+  if (vcCalEl && data.testCal !== undefined) vcCalEl.checked = !!data.testCal;
+
+  // Board test started or finished elsewhere (another browser): refresh it.
+  if (data.boardTestRunning !== undefined && !!data.boardTestRunning !== boardTestWasRunning) {
+    boardTestWasRunning = !!data.boardTestRunning;
+    if (boardTestWasRunning && !boardTestPollTimer) pollBoardTest();
+  }
+}
+
+// "Cal:" banner from what the device says is driving the motor: the PWM preset,
+// or (voltage board with Voltage Control on) the voltage calibration marks.
+let calModeVoltage = false;
+function setCalBanner(data) {
+  if (data.calibrationText === undefined) return;
+  calModeVoltage = data.calMode === 'voltage';
+  const el = document.getElementById('calibrationStatus');
+  if (el) el.textContent = 'Cal: ' + (data.calibrationText || '--');
+  const note = document.getElementById('calPresetNote');
+  if (note) note.style.display = calModeVoltage ? '' : 'none';
+}
 
 function applySpeedUnitLabels(useMPH) {
   const label = useMPH ? 'MPH' : 'KMH';
@@ -444,6 +715,9 @@ function applyMphState(useMPH) {
   applySpeedUnitLabels(useMPH);
   const unitEl = document.getElementById('calUnitLabel');
   if (unitEl) unitEl.textContent = useMPH ? 'mph' : 'km/h';
+  const vcUnitEl = document.getElementById('vcCalUnit');
+  if (vcUnitEl) vcUnitEl.textContent = useMPH ? 'mph' : 'km/h';
+  clusterUnit = useMPH ? 'mph' : 'km/h';
 }
 
 
@@ -458,7 +732,7 @@ async function fetchSettings() {
 
     document.getElementById('motorCalSelection').value = data.motorPerformanceVal || 1;
     document.getElementById('motorCalSelection').dispatchEvent(new Event('change'));
-    document.getElementById('calibrationStatus').textContent = 'Cal: ' + (data.calibrationText || '--');
+    setCalBanner(data);
 
     document.getElementById('maxSpeed').value = data.maxSpeed || 200;
     document.getElementById('maxSpeed-display').textContent = data.maxSpeed || 200;
@@ -508,22 +782,24 @@ async function fetchSettings() {
     document.getElementById('feedbackDeadband').value = data.feedbackDeadband ?? 1.5;
     document.getElementById('feedbackDeadband-display').textContent = data.feedbackDeadband ?? 1.5;
 
-    // Voltage control (V4 board only)
+    // Voltage control (voltage-injection board only)
+    if (data.railFloorV !== undefined) railFloorV = Number(data.railFloorV);
+    if (data.railCeilV !== undefined) railCeilV = Number(data.railCeilV);
+    const railMaxEl = document.getElementById('vcRailMaxV');
+    if (railMaxEl) { railMaxEl.min = railFloorV; railMaxEl.max = railCeilV; }
+    setDriveMax(data.driveMaxV);
     applyBoardVisibility(!!data.boardHasVoltageControl);
+    renderBoardTestPills(data.boardTestCode, false);
     const vcEnableEl = document.getElementById('voltageControlEnable');
     if (vcEnableEl) vcEnableEl.checked = data.voltageControlEnable !== false;
-    setSlider('vcPwmNominal', data.vcPwmNominal ?? 0.70);
-    setSlider('vcPwmMin', data.vcPwmMin ?? 0.15);
-    setSlider('vcVoltMin', data.vcVoltMin ?? 0.15);
-    setSlider('vcVoltMax', data.vcVoltMax ?? 1.00);
-    setSlider('vcVoltGain', data.vcVoltGain ?? 0.50);
-    setSlider('vcKp', data.vcKp ?? 1.50);
-    setSlider('vcKi', data.vcKi ?? 2.00);
-    setSlider('vcKd', data.vcKd ?? 0.00);
-    const vcMaxLabel = document.getElementById('vcMaxSpeedLabel');
-    if (vcMaxLabel) vcMaxLabel.textContent = data.maxSpeed ?? '--';
+    setSlider('vcPwmNominal', data.vcPwmNominal ?? 0.80);
+    setSlider('vcRailMaxV', data.vcRailMaxV ?? 12.0);
+    setSlider('vcTrimGain', data.vcTrimGain ?? 0.50);
+    setSlider('vcTrimLimit', data.vcTrimLimit ?? 0.20);
     const vcCalEl = document.getElementById('vcTestCal');
     if (vcCalEl) vcCalEl.checked = data.testCal || false;
+    clusterUnit = data.convertToMPH ? 'mph' : 'km/h';
+    renderDriveCal(data.driveCal, !!data.driveCalHz);
 
     // (firmware/web UI versions on the OTA page are filled in by the shared ota.js)
 
@@ -574,19 +850,19 @@ async function fetchStatus() {
       freqEl.textContent = Number(data.measuredFreqRawHz).toFixed(1);
     }
 
-    // Buck / voltage-control live readouts (V4 board)
+    // Buck / voltage-control live readouts (voltage-injection board)
     if (data.boardHasVoltageControl !== undefined) {
       const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
       setTxt('buckEnabledVal', data.buckEnabled ? 'Yes' : 'No');
-      setTxt('voltageCmdVal', data.voltageCmd !== undefined ? Number(data.voltageCmd).toFixed(2) : '--');
       setTxt('pwmFracVal', data.pwmFrac !== undefined ? Number(data.pwmFrac).toFixed(2) : '--');
+      if (data.boardHasVoltageControl) updateVoltageReadouts(data);
 
       if (data.boardHasVoltageControl) {
         const target = data.testSpeedo ? Number(data.tempSpeed) : Number(data.incomingSpeed);
         pushVcSample({
           target: Number.isFinite(target) ? target : null,
           measured: data.feedbackAvailable ? Number(data.measuredSpeed) : null,
-          voltage: data.voltageCmd !== undefined ? Number(data.voltageCmd) * 100 : null,
+          voltage: (data.driveV !== undefined && Number(data.driveMaxV) > 0) ? Number(data.driveV) / Number(data.driveMaxV) * 100 : null,
           pwm: data.pwmFrac !== undefined ? Number(data.pwmFrac) * 100 : null
         });
         scheduleCalDraw();
@@ -598,9 +874,7 @@ async function fetchStatus() {
     if (data.motorPerformanceVal !== undefined) {
       document.getElementById('motorPerformanceVal').textContent = data.motorPerformanceVal;
     }
-    if (data.calibrationText !== undefined) {
-      document.getElementById('calibrationStatus').textContent = 'Cal: ' + (data.calibrationText || '--');
-    }
+    setCalBanner(data);
 
     updateSpeedOffsetStatus(data.speedOffsetType, data.currentSpeedOffset);
 
@@ -620,7 +894,6 @@ async function fetchStatus() {
 
     // Calibration builder live duty readout
     updateCalDutyReadout(data.tempDutyCycle);
-    document.getElementById('calibrationStatus').textContent = 'Cal: ' + (data.calibrationText || '--');
 
     // Live calibration-curve marker. In cal mode the achieved speed is on the
     // needle (unknown here), so ride the curve at the jogged duty; otherwise use
@@ -750,9 +1023,9 @@ function initCalBuilder() {
     document.getElementById('calText').value = text;
     const nameEl = document.getElementById('calName');
     const base = (nameEl && nameEl.value.trim()) || 'calibration';
-    const fname = base.replace(/[^a-z0-9._-]+/gi, '_') + '.txt';
+    const fname = base.replace(/[^a-z0-9._-]+/gi, '_') + '_pwm-cal.txt';
     downloadTextFile(fname, text);
-    showNotification('Exported to text file');
+    showNotification('Exported PWM calibration');
   }));
 
   bindCal('calExportCBtn', () => calPost({ op: 'export' }).then((r) => {
@@ -760,9 +1033,24 @@ function initCalBuilder() {
     document.getElementById('calText').value = text;
     const nameEl = document.getElementById('calName');
     const base = (nameEl && nameEl.value.trim()) || 'calibration';
-    const fname = base.replace(/[^a-z0-9._-]+/gi, '_') + '_carray.txt';
+    const fname = base.replace(/[^a-z0-9._-]+/gi, '_') + '_pwm-carray.txt';
     downloadTextFile(fname, text);
-    showNotification('Exported firmware C-Array preset');
+    showNotification('Exported PWM C-Array preset');
+  }));
+
+  bindCal('calExportVoltageBtn', () => calPost({ op: 'export' }).then((r) => {
+    if (!r.voltage) {
+      showNotification('No voltage calibration on this board', 'error');
+      return;
+    }
+    if (!r.voltageMarks) {
+      showNotification('No marks captured yet: nothing to export', 'error');
+      return;
+    }
+    document.getElementById('calText').value = r.voltage;
+    const day = new Date().toISOString().slice(0, 10);
+    downloadTextFile('speedpulser_voltage-cal_' + day + '.txt', r.voltage);
+    showNotification('Exported voltage calibration (' + r.voltageMarks + ' marks)');
   }));
 
   bindCal('calImportBtn', () => {
@@ -788,13 +1076,22 @@ function initCalBuilder() {
   }
 }
 
+// One importer for both kinds; the device reads the file's "type" and answers
+// with kind:'voltage' for a voltage cal (otherwise the PWM builder state).
 function calImportText(text) {
   calPost({ op: 'import', json: text }).then((s) => {
+    if (s && s.kind === 'voltage') {
+      renderDriveCal(s.driveCal, s.driveCalHz);
+      fetchSettings();   // Nominal PWM / Maximum Rail / MPH came with the file
+      const n = Array.isArray(s.driveCal) ? s.driveCal.length : 0;
+      showNotification('Voltage calibration imported (' + n + ' marks)');
+      return;
+    }
     applyCalState(s);
     refreshCalibrationsSelect();
     fetchCalCurve();
-    showNotification('Calibration imported');
-  });
+    showNotification('PWM calibration imported');
+  }).catch(() => {});   // calPost already showed the device's reason
 }
 
 // Trigger a browser download of the given text as a file.
@@ -994,9 +1291,12 @@ function pushVcSample(s) {
   if (vcHistory.length > VC_HISTORY_MAX) vcHistory.shift();
 }
 
-function legendItem(color, label) {
-  return '<span class="legend-item"><span class="legend-swatch" style="background:' +
-         color + '"></span>' + label + '</span>';
+// One legend entry. `kind` matches how the trace is drawn: 'line' (solid),
+// 'dash' (dashed) or 'dot' (markers); `axis` names the scale it is read against.
+function legendItem(color, label, kind, axis) {
+  return '<span class="legend-item"><span class="legend-swatch ' + (kind || 'line') +
+         '" style="--sw:' + color + '"></span>' + label +
+         (axis ? ' <small>(' + axis + ')</small>' : '') + '</span>';
 }
 
 // Swap the dashboard graph's title + legend between the legacy calibration curve
@@ -1008,12 +1308,18 @@ function updateDashChartChrome(isV4) {
   if (!legend) return;
   if (isV4) {
     legend.innerHTML =
-      legendItem(VC_COL.target, 'Target') +
-      legendItem(VC_COL.measured, 'Measured') +
-      legendItem(VC_COL.voltage, 'Voltage %') +
-      legendItem(VC_COL.pwm, 'PWM %');
+      legendItem(VC_COL.target, 'Target speed', 'dash', 'left') +
+      legendItem(VC_COL.measured, 'Measured speed', 'line', 'left') +
+      legendItem(VC_COL.voltage, 'Drive', 'line', 'right %') +
+      legendItem(VC_COL.pwm, 'PWM', 'line', 'right %');
   } else {
-    legend.innerHTML = '<span class="legend-item"><span class="legend-swatch point"></span>Current Duty/Speed</span>';
+    // Same theme colours drawCalCurve() reads.
+    const style = getComputedStyle(document.documentElement);
+    const col = (name, fallback) => (style.getPropertyValue(name).trim() || fallback);
+    legend.innerHTML =
+      legendItem(col('--primary', '#00D9FF'), 'Calibration curve', 'line') +
+      legendItem(col('--success', '#2EA043'), 'Calibration points', 'dot') +
+      legendItem(col('--secondary', '#FF6B35'), 'Current duty / speed', 'dot');
   }
 }
 

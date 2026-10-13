@@ -40,6 +40,7 @@ float pidKi = 1.3f;                   // PID integral gain
 float pidKd = 0.0f;                   // PID derivative gain
 float feedbackDeadband = 1.5f;        // PID deadband (Hz); within this error P/D are silenced (integral still trims). 0 = off
 uint16_t feedbackMaxFreq = 254;       // measured motor motor Hz (not user-adjustable)
+bool topSpeedCaptured = false;        // feedbackMaxFreq is only a placeholder until Top Speed Calibration captures it
 uint16_t feedbackMinSpeed = 40;       // kph; targets below this run open-loop (motor can't sustain slower)
 uint16_t measuredSpeed = 0;           // measured motor speed from feedback (kph)
 int16_t pidCorrection = 0;            // current PID duty correction

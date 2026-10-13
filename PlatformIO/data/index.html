@@ -8,14 +8,14 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
-    <title>SpeedPulser V4</title>
-    <link rel="stylesheet" href="style.css?v=4.02">
+    <title>SpeedPulser V5</title>
+    <link rel="stylesheet" href="style.css?v=5.01">
 </head>
 
 <body>
     <div class="container">
         <header class="topbar">
-            <h1>SpeedPulser <span class="brand-badge">V4</span></h1>
+            <h1>SpeedPulser <span class="brand-badge">V5</span></h1>
             <div class="status-bar">
                 <span class="status-badge" id="calibrationStatus">Cal: --</span>
             </div>
@@ -73,7 +73,7 @@
                     <canvas id="calCurveCanvas" class="cal-graph"></canvas>
                 </div>
                 <div class="cal-graph-legend" id="dashChartLegend">
-                    <span class="legend-item"><span class="legend-swatch point"></span>Current Duty/Speed</span>
+                    <span class="legend-item"><span class="legend-swatch point"></span>Current duty / speed</span>
                 </div>
             </section>
 
@@ -94,6 +94,9 @@
                         <option value="1">Loading calibrations...</option>
                     </select>
                 </div>
+                <p class="hint" id="calPresetNote" style="display:none;">Voltage Control is on, so the motor
+                   runs from the <strong>voltage calibration</strong> (the marks on the Calibration page) and
+                   this PWM preset isn't used. It only applies with Voltage Control off.</p>
             </section>
 
             <section class="card centered-card">
@@ -234,6 +237,39 @@
 
         <!-- ADVANCED PAGE -->
         <div class="page" id="advanced-page">
+            <section class="card centered-card" id="boardCard">
+                <h2>Board</h2>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <div class="status-label">Board Type</div>
+                        <div class="status-value" id="boardTypeVal">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Board Test</div>
+                        <div class="status-value"><span class="pill" id="boardTestPill">--</span></div>
+                    </div>
+                    <div class="status-item vc-only">
+                        <div class="status-label">Motor Rail</div>
+                        <div class="status-value" id="boardRailVal">--</div>
+                    </div>
+                </div>
+                <p class="hint" id="boardTestText" style="margin-top:12px;">--</p>
+                <table class="bt-table vc-only" id="boardTestTable">
+                    <thead><tr><th>Step</th><th>Target</th><th>Measured</th></tr></thead>
+                    <tbody id="boardTestRows"></tbody>
+                </table>
+                <div class="button-group vc-only">
+                    <button class="btn-primary" id="boardTestBtn">Test Board</button>
+                </div>
+                <div class="info-box vc-only" style="margin-top:1rem;">
+                    <p>The board type comes from the GPIO3 strap, read at every power-up.
+                       <strong>Test Board</strong> stops the motor for a few seconds, steps the
+                       motor rail to 5, 7.5 and 10 V, and reads each one back on GPIO1. A pass
+                       proves the voltage-injection path and the rail sense, and stores this
+                       board's own voltage line. Run it once on a new board, on a 12 V+ supply.</p>
+                </div>
+            </section>
+
             <section class="card centered-card">
                 <h2>Motor Direction &amp; Feedback</h2>
                 <div class="form-group">
@@ -307,69 +343,53 @@
                 <div class="form-group">
                     <label>
                         <input type="checkbox" id="voltageControlEnable">
-                        Enable Closed-Loop Voltage Control
+                        Enable Voltage Control
                     </label>
                 </div>
                 <div class="info-box" style="margin-bottom:1rem;">
-                    <p>Mid-ranging control: a fast loop trims PWM duty to hit the target speed
-                       while a slow loop nudges the buck-converter voltage to keep the PWM near
-                       its nominal working point. Disable to fall back to fixed full-voltage PWM
-                       (legacy behaviour).</p>
+                    <p>The motor is driven with one <strong>drive</strong> value (rail volts &times; PWM).
+                       Above <em>3.0 V &times; Nominal PWM</em> the PWM stays at Nominal and only
+                       the rail moves, which keeps low speeds smooth. Below that the rail stays at
+                       its 3.0 V minimum and the PWM falls to zero, so the drive reaches all the way
+                       down to a stopped needle. Running speeds come from the marks captured on the
+                       Calibration page. Untick to fall back to the fixed 9 V rail and the legacy
+                       PWM presets.</p>
+                    <p>Changing these settings after calibrating moves the needle: recapture the marks.</p>
                 </div>
                 <div class="input-group">
                     <label>Nominal PWM</label>
                     <div class="slider-display">
-                        <input type="range" id="vcPwmNominal" min="0.2" max="0.95" step="0.01" value="0.70">
-                        <span id="vcPwmNominal-display">0.70</span>
+                        <input type="range" id="vcPwmNominal" min="0.2" max="1" step="0.01" value="0.80">
+                        <span id="vcPwmNominal-display">80%</span>
                     </div>
                 </div>
                 <div class="input-group">
-                    <label>Minimum PWM</label>
+                    <label>Maximum Rail</label>
                     <div class="slider-display">
-                        <input type="range" id="vcPwmMin" min="0" max="0.9" step="0.01" value="0.15">
-                        <span id="vcPwmMin-display">0.15</span>
+                        <input type="range" id="vcRailMaxV" min="3" max="12" step="0.1" value="12.0">
+                        <span id="vcRailMaxV-display">12.0 V</span>
+                    </div>
+                </div>
+                <div class="info-box" style="margin-bottom:1rem;">
+                    <p>Feedback trim (only with <strong>Feedback Enable</strong> on, a working tacho,
+                       and above <strong>Min Feedback Speed</strong>): one slow loop nudges the
+                       calibrated drive to hold the motor speed captured for each mark. It does
+                       nothing inside the <strong>PID Deadband</strong> and can never move the drive
+                       more than the limit below, so it can't fight the calibration. The PID Kp/Ki/Kd
+                       sliders are for legacy boards only.</p>
+                </div>
+                <div class="input-group">
+                    <label>Feedback Trim Gain</label>
+                    <div class="slider-display">
+                        <input type="range" id="vcTrimGain" min="0" max="2" step="0.05" value="0.50">
+                        <span id="vcTrimGain-display">0.50</span>
                     </div>
                 </div>
                 <div class="input-group">
-                    <label>Minimum Voltage</label>
+                    <label>Feedback Trim Limit</label>
                     <div class="slider-display">
-                        <input type="range" id="vcVoltMin" min="0" max="1" step="0.01" value="0.15">
-                        <span id="vcVoltMin-display">0.15</span>
-                    </div>
-                </div>
-                <div class="input-group">
-                    <label>Maximum Voltage</label>
-                    <div class="slider-display">
-                        <input type="range" id="vcVoltMax" min="0" max="1" step="0.01" value="1.00">
-                        <span id="vcVoltMax-display">1.00</span>
-                    </div>
-                </div>
-                <div class="input-group">
-                    <label>Voltage Trim Gain</label>
-                    <div class="slider-display">
-                        <input type="range" id="vcVoltGain" min="0" max="2" step="0.05" value="0.50">
-                        <span id="vcVoltGain-display">0.50</span>
-                    </div>
-                </div>
-                <div class="input-group">
-                    <label>PWM Loop Kp</label>
-                    <div class="slider-display">
-                        <input type="range" id="vcKp" min="0" max="5" step="0.05" value="1.50">
-                        <span id="vcKp-display">1.50</span>
-                    </div>
-                </div>
-                <div class="input-group">
-                    <label>PWM Loop Ki</label>
-                    <div class="slider-display">
-                        <input type="range" id="vcKi" min="0" max="5" step="0.05" value="2.00">
-                        <span id="vcKi-display">2.00</span>
-                    </div>
-                </div>
-                <div class="input-group">
-                    <label>PWM Loop Kd</label>
-                    <div class="slider-display">
-                        <input type="range" id="vcKd" min="0" max="5" step="0.05" value="0.00">
-                        <span id="vcKd-display">0.00</span>
+                        <input type="range" id="vcTrimLimit" min="0" max="0.5" step="0.01" value="0.20">
+                        <span id="vcTrimLimit-display">±20%</span>
                     </div>
                 </div>
             </section>
@@ -410,8 +430,12 @@
                         <div class="status-value" id="buckEnabledVal">--</div>
                     </div>
                     <div class="status-item">
-                        <div class="status-label">Voltage Cmd</div>
+                        <div class="status-label">Rail Set (V)</div>
                         <div class="status-value" id="voltageCmdVal">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Rail Measured (V)</div>
+                        <div class="status-value" id="railMeasVal">--</div>
                     </div>
                     <div class="status-item">
                         <div class="status-label">PWM Fraction</div>
@@ -441,17 +465,18 @@
             </section>
 
             <section class="card centered-card" id="voltageCalCard" style="display:none;">
-                <h2>Top Speed Calibration</h2>
+                <h2>Drive Calibration</h2>
                 <div class="info-box" style="margin-bottom:1rem;">
-                    <p>This board can lift the motor supply voltage as well as PWM. To set the
-                       top speed: tick <strong>Calibration Mode</strong>, then raise the
-                       <strong>Voltage Lift</strong> and/or <strong>PWM Duty</strong> until the
-                       needle sits exactly on your desired top-speed mark
-                       (Max Speed = <span id="vcMaxSpeedLabel">--</span>). Then press
-                       <strong>Capture Top Speed</strong>. Every lower speed then scales
-                       linearly from this single point.</p>
-                    <p>Set the low cut-off with <strong>Min Feedback Speed</strong> on the
-                       Advanced page.</p>
+                    <ol class="cal-steps">
+                        <li>Run <strong>Test Board</strong> on the Advanced page once
+                            (<span class="pill" id="vcCalBoardPill">--</span>).</li>
+                        <li>Tick <strong>Calibration Mode</strong>. The motor starts stopped.</li>
+                        <li>Raise the <strong>Drive</strong> until the needle sits exactly on a mark,
+                            wait for <em>Steady</em>, enter the mark and press <strong>Capture Mark</strong>.</li>
+                        <li>Capture a low mark (e.g. 20), the top mark, and a few in between.
+                            Running speeds are interpolated between the marks, so more marks
+                            means a closer needle.</li>
+                    </ol>
                 </div>
 
                 <div class="form-group">
@@ -462,23 +487,65 @@
                 </div>
 
                 <div class="input-group">
-                    <label>Voltage Lift (%)</label>
-                    <div class="slider-display">
-                        <input type="range" id="tempVoltageCmd" min="0" max="100" step="1" value="0">
-                        <span id="tempVoltageCmd-display">0</span>
+                    <label>Drive</label>
+                    <div class="stepper-row">
+                        <button class="stepper-btn coarse" data-djog="-0.5">−0.5</button>
+                        <button class="stepper-btn" data-djog="-0.1">−0.1</button>
+                        <button class="stepper-btn fine" data-djog="-0.02">−0.02</button>
+                        <button class="stepper-btn fine" data-djog="0.02">+0.02</button>
+                        <button class="stepper-btn" data-djog="0.1">+0.1</button>
+                        <button class="stepper-btn coarse" data-djog="0.5">+0.5</button>
+                    </div>
+                    <div class="slider-display" style="margin-top:0.75rem;">
+                        <input type="range" id="vcDriveV" min="0" max="12" step="0.01" value="0">
+                        <span id="vcDriveV-display">0.00 V</span>
                     </div>
                 </div>
 
                 <div class="input-group">
-                    <label>PWM Duty</label>
-                    <div class="slider-display">
-                        <input type="range" id="vcDuty" min="0" max="4095" step="5" value="0">
-                        <span id="vcDuty-display">0</span>
+                    <label>Speed the needle is showing (<span id="vcCalUnit">km/h</span>)</label>
+                    <div class="vc-capture-row">
+                        <input type="number" id="vcCalSpeed" min="1" max="400" step="1" value="20">
+                        <button class="btn-primary" id="captureMarkBtn">Capture Mark</button>
                     </div>
                 </div>
 
+                <p class="hint vc-cal-hint" id="vcCalWarn">&nbsp;</p>
+
+                <div class="status-grid vc-readouts">
+                    <div class="status-item">
+                        <div class="status-label">Drive</div>
+                        <div class="status-value" id="vcCalDrive">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Rail Set</div>
+                        <div class="status-value" id="vcCalSetV">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Rail Measured</div>
+                        <div class="status-value" id="vcCalMeasV">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">PWM</div>
+                        <div class="status-value" id="vcCalPwm">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Motor (Hz)</div>
+                        <div class="status-value" id="vcCalHz">--</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Speed</div>
+                        <div class="status-value" id="vcCalSteady">--</div>
+                    </div>
+                </div>
+
+                <table class="bt-table" style="margin-top:1rem;">
+                    <thead><tr><th>Mark</th><th>Motor Hz</th><th>Drive</th><th>Rail &times; PWM</th><th></th></tr></thead>
+                    <tbody id="vcCalRows"></tbody>
+                </table>
+                <p class="hint" id="vcCalResult">Not calibrated.</p>
                 <div class="button-group">
-                    <button class="btn-primary" id="captureTopSpeedBtn">Capture Top Speed</button>
+                    <button class="btn-secondary" id="clearMarksBtn">Clear All Marks</button>
                 </div>
             </section>
 
@@ -550,20 +617,32 @@
             <section class="card centered-card">
                 <h2>Export / Import</h2>
                 <div class="cal-action-grid">
-                    <button class="btn-primary" id="calExportTextBtn">Export Text</button>
-                    <button class="btn-secondary" id="calExportCBtn">Export C-Array</button>
+                    <button class="btn-primary vc-only" id="calExportVoltageBtn" style="display:none;">Export Voltage Cal</button>
+                    <button class="btn-primary" id="calExportTextBtn">Export PWM Cal</button>
+                    <button class="btn-secondary" id="calExportCBtn">Export PWM C-Array</button>
                     <button class="btn-secondary" id="calImportBtn">Import Text</button>
                 </div>
                 <input type="file" id="calImportFile" accept=".txt,text/plain" hidden>
                 <textarea id="calText" class="cal-textarea" rows="8" readonly
                           placeholder="Exported / imported calibration text appears here."></textarea>
                 <div class="info-box" style="margin-top:1rem;">
-                    <p>Export Text saves the active calibration to a .txt file you can share or
-                       back up. Import Text opens a .txt file, shows it here, and applies it.</p>
-                    <p>Export C-Array saves a paste-ready firmware preset (a
+                    <p>There are two kinds of calibration, and each file says which it is on its
+                       <code>"type"</code> line:</p>
+                    <ul class="cal-steps">
+                        <li class="vc-only" style="display:none;"><strong>Voltage cal</strong>
+                            (<code>speedpulser-voltage-cal</code>): the Drive Calibration marks, each a
+                            needle speed against a drive in volts (rail &times; PWM), plus the Nominal PWM
+                            and Maximum Rail they were captured with. Used on a voltage board with
+                            Voltage Control on.</li>
+                        <li><strong>PWM cal</strong> (<code>speedpulser-pwm-cal</code>): the Calibration
+                            Builder points, each a needle speed against a motor PWM duty on the fixed
+                            ~9&nbsp;V supply. Used on legacy boards, or with Voltage Control off.</li>
+                    </ul>
+                    <p>Import Text opens a .txt file, shows it here, and loads it as whichever kind it is.</p>
+                    <p>Export PWM C-Array saves a paste-ready firmware preset (a
                        <code>motorPerformanceN[]</code> table plus its
                        <code>calibrationProfiles[]</code> line, auto-numbered after the last
-                       built-in preset) for building it in as a permanent calibration.</p>
+                       built-in preset) for building it in as a permanent PWM calibration.</p>
                 </div>
             </section>
         </div>
@@ -675,8 +754,8 @@
 
     </div>
 
-    <script src="app.js?v=4.02"></script>
-    <script src="ota.js?v=4.02"></script>
+    <script src="app.js?v=5.01"></script>
+    <script src="ota.js?v=5.01"></script>
 </body>
 
 </html>

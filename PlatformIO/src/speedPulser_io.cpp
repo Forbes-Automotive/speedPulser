@@ -1,6 +1,8 @@
 #include "speedPulser_defs.h"
 #include "speedPulser_control.h"
 #include "speedPulser_tasks.h"
+#include "speedPulser_voltage.h"
+#include "speedPulser_driveCal.h"
 
 void basicInit()
 {
@@ -52,7 +54,9 @@ void basicInit()
 }
 
 // Drive the direction pin from the reverseDirection flag.
-// Default (unticked) idles LOW = normal direction; ticking Reverse pulls HIGH.
+// Default (unticked) drives LOW = the correct direction; ticking Reverse drives HIGH.
+// (V4.03-V5.00 had this the other way round, so Reverse had to be ticked to spin
+// the right way; the setting moved to a new EEP key so those units start unticked.)
 void applyDirection()
 {
     digitalWrite(pinDirection, reverseDirection ? HIGH : LOW);
@@ -120,6 +124,19 @@ void testSpeed()
     }
 }
 
+// Sweep output, 0..1 of full deflection. Voltage board: the drive (rail + PWM)
+// up to the calibrated Max Speed, so it reaches the top of the dial whatever rail
+// boot left; legacy board: the raw 12-bit PWM.
+static void sweepOut(float frac)
+{
+    if (boardHasVoltageControl && voltageControlEnable)
+    {
+        applyMotorDrive(frac * driveForSpeed(maxSpeed > 0 ? maxSpeed : 200));
+        return;
+    }
+    setMotorDutyRaw((uint32_t)((float)PWM_DUTY_MAX * frac));
+}
+
 void needleSweep()
 {
     // Startup needle exercise: drive the gauge to its MECHANICAL full deflection
@@ -129,7 +146,6 @@ void needleSweep()
     // the peg on the 12-bit hardware.
     const uint32_t kPollMs  = 10;                               // software-fade cadence
     const long     kSpan    = (maxSpeed < 10) ? 200 : maxSpeed; // sets sweep DURATION only
-    const uint32_t kMaxDuty = PWM_DUTY_MAX;                     // full deflection = full 12-bit duty
 
     // Ramp UP. Progress is INTEGRATED per tick from the LIVE sweepSpeed, so
     // dragging the Sweep Speed slider retimes an in-progress sweep smoothly.
@@ -140,10 +156,10 @@ void needleSweep()
         if (fullMs < 1) fullMs = 1;
         progress += (float)kPollMs / (float)fullMs;
         if (progress > 1.0f) progress = 1.0f;
-        setMotorDutyRaw((uint32_t)(kMaxDuty * progress));
+        sweepOut(progress);
         vTaskDelay(pdMS_TO_TICKS(kPollMs));
     }
-    setMotorDutyRaw(kMaxDuty);                                    // pin to full deflection
+    sweepOut(1.0f);                                               // pin to full deflection
 
     // Pause at full deflection
     vTaskDelay(pdMS_TO_TICKS((uint32_t)sweepSpeed * 2));
@@ -156,12 +172,12 @@ void needleSweep()
         if (fullMs < 1) fullMs = 1;
         progress += (float)kPollMs / (float)fullMs;
         if (progress > 1.0f) progress = 1.0f;
-        setMotorDutyRaw((uint32_t)(kMaxDuty * (1.0f - progress)));
+        sweepOut(1.0f - progress);
         vTaskDelay(pdMS_TO_TICKS(kPollMs));
     }
 
     vTaskDelay(pdMS_TO_TICKS((uint32_t)sweepSpeed * 2));
     dutyCycle = 0;
     appliedDutyCycle = 0;
-    setMotorDuty(0);  // ensure output is fully off after sweep
+    sweepOut(0.0f);   // ensure output is fully off after sweep
 }

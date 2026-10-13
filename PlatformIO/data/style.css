@@ -702,3 +702,62 @@ input[type="file"]::file-selector-button:hover { background:rgba(36,209,196,.12)
 .ota-wifi-row input::placeholder { color: var(--muted); }
 .ota-wifi-row input:focus { outline: none; border-color: var(--accent); }
 .btn.ota-icon { flex: none; width: 44px; padding: 0; font-size: 18px; line-height: 1; }
+
+/* Jog steppers (Calibration Builder duty, voltage-board rail volts) */
+.stepper-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.stepper-btn {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 0; font-size: 13px; font-weight: 600; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.stepper-btn:hover { border-color: var(--accent); }
+.stepper-btn.coarse { color: var(--accent); }
+.stepper-btn.fine { color: var(--muted); }
+.stepper-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Voltage-board calibration + Test Board */
+.cal-steps { margin: 6px 0 10px 20px; line-height: 1.6; }
+.bt-table { width: 100%; border-collapse: collapse; margin: 4px 0 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.bt-table th, .bt-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.bt-table th { color: var(--muted); font-weight: 600; }
+.bt-table td.muted { color: var(--muted); }
+.bt-table .stepper-btn { padding: 4px 10px; }
+
+/* Drive calibration: the controls sit above every live read-out, the hint is a
+   reserved height and the values can't wrap, so nothing the device reports
+   can shift the buttons while you're pressing them. */
+.vc-capture-row { display: flex; gap: 8px; align-items: stretch; }
+.vc-capture-row input { flex: 1; min-width: 0; }
+.vc-capture-row button { flex: none; white-space: nowrap; }
+.vc-cal-hint { min-height: 3em; margin: 10px 0; }
+.vc-readouts { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.vc-readouts .status-value { font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Dashboard graph + its legend. Each swatch takes its colour from --sw (set
+   inline by app.js) and is drawn the way the trace is: a solid line, a dashed
+   line, or a dot. */
+.cal-graph-wrap { position: relative; width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.cal-graph { display: block; width: 100%; height: auto; touch-action: none; }
+.cal-graph-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; margin-top: 12px; font-size: 13px; color: var(--text); }
+.cal-graph-legend .legend-item { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.cal-graph-legend .legend-item small { color: var(--muted); font-size: 11px; }
+.cal-graph-legend .legend-swatch { flex: none; display: inline-block; width: 20px; height: 4px; border-radius: 2px; background: var(--sw, var(--muted)); }
+.cal-graph-legend .legend-swatch.dash { height: 0; border-radius: 0; background: none; border-top: 3px dashed var(--sw, var(--muted)); }
+.cal-graph-legend .legend-swatch.dot { width: 11px; height: 11px; border-radius: 50%; }
+.cal-graph-legend .legend-swatch.point { --sw: var(--secondary); width: 11px; height: 11px; border-radius: 50%; }
+
+/* --- no text highlight on long press ------------------------------------ */
+/* Pressing and holding on a phone starts selecting text (and pops up the copy
+   menu on iPhone), which gets in the way of the buttons and sliders. Switch it
+   off for the whole page... */
+body {
+  -webkit-user-select: none;    /* Safari / iPhone */
+  user-select: none;            /* every other browser */
+  -webkit-touch-callout: none;  /* iPhone: no copy / look-up menu on long press */
+}
+/* ...but keep it where you type, or might want to copy something out:
+   text boxes, the monitor / log windows (pre) and repo names / commands (code) */
+input, textarea, select, pre, code, [contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}

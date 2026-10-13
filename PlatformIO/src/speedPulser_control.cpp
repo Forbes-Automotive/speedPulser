@@ -2,6 +2,7 @@
 #include "speedPulser_defs.h"
 #include "speedPulser_calBuilder.h"
 #include "speedPulser_voltage.h"
+#include "speedPulser_driveCal.h"
 
 // ===== Control Variables =====
 volatile unsigned long dutyCycleIncoming = 0;
@@ -349,7 +350,91 @@ void resetPid()
   pidCorrection = 0;
 }
 
-// ===== Feedback Calibration =====
+/// ===== Speed <-> tacho scale =====
+// Voltage board with a drive calibration: the captured marks map dial speed <->
+// tacho Hz directly (piecewise, so a dial that isn't linear near zero still reads
+// right). Otherwise the legacy single scale: feedbackMaxFreq Hz at maxSpeed,
+// straight through zero (legacy boards behave exactly as before).
+static bool useDriveTable()
+{
+  return boardHasVoltageControl && voltageControlEnable && driveCalHzValid();
+}
+
+float speedToTachoHz(float speed)
+{
+  if (useDriveTable())
+    return hzForSpeed(speed);
+  const uint16_t scaleFreq = feedbackMaxFreq > 0 ? feedbackMaxFreq : 1;
+  const uint16_t spdSpan = maxSpeed > 0 ? maxSpeed : 1;
+  return speed * (float)scaleFreq / (float)spdSpan;
+}
+
+static float tachoHzToSpeed(float hz)
+{
+  if (useDriveTable())
+    return speedForHz(hz);
+  const uint16_t scaleFreq = feedbackMaxFreq > 0 ? feedbackMaxFreq : 1;
+  const uint16_t spdSpan = maxSpeed > 0 ? maxSpeed : 1;
+  return hz * (float)spdSpan / (float)scaleFreq;
+}
+
+// Keep the legacy feedbackMaxFreq (Hz at maxSpeed) in step with the drive table.
+// It still normalises the legacy PID gains, so call after a capture, at boot and
+// whenever maxSpeed changes.
+void syncFeedbackMaxFreq()
+{
+  if (!driveCalHzValid())
+    return;
+  long hz = lroundf(hzForSpeed((float)(maxSpeed > 0 ? maxSpeed : 1)));
+  feedbackMaxFreq = (uint16_t)constrain(hz, 1L, 65535L);
+}
+
+// ===== Capture window =====
+// The last ~1 s of RAW tacho readings (one per 100 ms measurement). The capture
+// averages over it and refuses a reading that is still moving, so a mark isn't
+// taken mid-transition just after the drive was nudged.
+#define FB_RING 10
+static float fbRing[FB_RING] = {0};
+static uint8_t fbRingIdx = 0;
+static uint8_t fbRingCount = 0;
+
+static void pushFeedbackSample(float hz)
+{
+  fbRing[fbRingIdx] = hz;
+  fbRingIdx = (fbRingIdx + 1) % FB_RING;
+  if (fbRingCount < FB_RING)
+    fbRingCount++;
+}
+
+// Mean of the window, its spread ((max-min)/mean, %) and its drift (newer half
+// mean - older half mean, Hz). False until the window is full or when the motor
+// isn't turning.
+bool feedbackHzWindow(float &meanHz, float &spreadPct, float &driftHz)
+{
+  meanHz = 0.0f;
+  spreadPct = 0.0f;
+  driftHz = 0.0f;
+  if (fbRingCount < FB_RING)
+    return false;
+  float sum = 0.0f, older = 0.0f, lo = fbRing[0], hi = fbRing[0];
+  for (uint8_t k = 0; k < FB_RING; k++)
+  {
+    const float v = fbRing[(fbRingIdx + k) % FB_RING]; // k = 0 is the oldest
+    sum += v;
+    if (k < FB_RING / 2) older += v;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  meanHz = sum / (float)FB_RING;
+  if (meanHz < 1.0f)
+    return false;
+  spreadPct = (hi - lo) * 100.0f / meanHz;
+  const float half = (float)(FB_RING / 2);
+  driftHz = (sum - older) / half - older / half;
+  return true;
+}
+
+// ===== Feedback Calibration (legacy boards) =====
 // Run the motor, reads the REAL speed the motor shows, and parses it here.
 // Used to trim motor speed if the motor is binding slightly - to get the best speed response
 // Returns false if there's no motion to sample.
@@ -361,15 +446,16 @@ bool calibrateFeedbackMaxFreq(uint16_t actualSpeed)
   long hz = lroundf(measuredFreqHz * (float)spdSpan / (float)actualSpeed);
   hz = constrain(hz, 1L, 65535L);
   feedbackMaxFreq = (uint16_t)hz;
+  topSpeedCaptured = true;
   resetPid(); // scale changed -> drop stale integral so it re-settles cleanly
   return true;
 }
 
 // ===== Motor Speed Measurement =====
 // Period-based motor frequency (Hz) from the GPIO4 ISR accumulators, smoothed,
-// published to measuredFreqHz/measuredSpeed. Split out of the PID so the speed
-// readout and calibration stay live even in open-loop / cal-builder
-// modes where the PID isn't running. Call on a ~100 ms cadence.
+// published to measuredFreqHz/measuredSpeed. Called once per 100 ms by the
+// control task in EVERY mode, so the read-outs, the capture window and the
+// feedback loops all share one fresh measurement.
 float updateMeasuredFreq()
 {
   const uint32_t FB_STALL_US = 300000UL; // no edge for 300 ms: assume stopped
@@ -383,9 +469,6 @@ float updateMeasuredFreq()
   feedbackAccumUs = 0;
   portEXIT_CRITICAL(&feedbackMux);
 
-  const uint16_t scaleFreq = feedbackMaxFreq > 0 ? feedbackMaxFreq : 1;
-  const uint16_t spdSpan = maxSpeed > 0 ? maxSpeed : 1;
-
   float measuredFreq;
   if (pulses >= 2 && accumUs > 0 &&
       (uint32_t)(micros() - lastEdge) < FB_STALL_US)
@@ -397,6 +480,7 @@ float updateMeasuredFreq()
     measuredFreq = 0.0f;
   }
   measuredFreqRawHz = measuredFreq; // send raw (pre-smoothing) rate for signal diagnostics
+  pushFeedbackSample(measuredFreq); // capture window
 
   if (measuredFreq > 0.0f)
   {
@@ -411,28 +495,26 @@ float updateMeasuredFreq()
   {
     measFreqFilt += FB_MEAS_ALPHA * (measuredFreq - measFreqFilt);
   }
-  measuredFreqHz = measFreqFilt;                                                  // filtered freq for calibration/UI
-  measuredSpeed = (uint16_t)((measFreqFilt * (float)spdSpan) / (float)scaleFreq); // kph, for UI/status only
+  measuredFreqHz = measFreqFilt;                                  // filtered freq for calibration/UI
+  measuredSpeed = (uint16_t)lroundf(tachoHzToSpeed(measFreqFilt)); // cluster units, for UI/status only
   return measFreqFilt;
 }
 
-// ===== Feedback Trim (PID) =====
+// ===== Feedback Trim (PID, legacy duty path) =====
 // Trims the feed-forward duty so the measured motor speed tracks the requested
-// speed.
+// speed. Uses the measurement taken this 100 ms tick (updateMeasuredFreq).
 int16_t applyFeedbackTrim(uint16_t targetSpeed, uint16_t baseDuty)
 {
   const float PID_PERIOD_S = 0.1f;   // 100 ms control interval
   const float deadbandHz = feedbackDeadband > 0.0f ? feedbackDeadband : 0.0f; // user-set anti-hunt band; 0 = off
 
-  // Measure + publish the tacho (shared with the open-loop / cal-builder readout).
-  const float measFreq = updateMeasuredFreq();
+  const float measFreq = measuredFreqHz;
 
   // Work in the Motor FREQUENCY domain (Hz), not integer kph. Converting the
   // feedback to whole-kph throws away most of the low/mid-range resolution and
   // makes the error jump in coarse steps; Hz keeps it smooth.
   const uint16_t scaleFreq = feedbackMaxFreq > 0 ? feedbackMaxFreq : 1;
-  const uint16_t spdSpan = maxSpeed > 0 ? maxSpeed : 1;
-  const float targetFreq = (float)targetSpeed * (float)scaleFreq / (float)spdSpan; // Hz expected at the requested speed
+  const float targetFreq = speedToTachoHz((float)targetSpeed); // Hz expected at the requested speed
 
   // Low-speed open-loop cutoff: below feedbackMinSpeed the motor can't run smoothly
   // so don't use PID. feedbackMinSpeed=0 disables.
@@ -494,108 +576,85 @@ int16_t applyFeedbackTrim(uint16_t targetSpeed, uint16_t baseDuty)
   return (int16_t)corrected; // final applied duty (0..PWM_DUTY_MAX)
 }
 
-// ===== V4 Mid-Ranging Control (voltage + PWM) =====
-// New-board control law. Because the gauge is linear (needle ∝ motor RPM), one
-// top RPM point (feedbackMaxFreq) defines the whole scale. A FAST inner PID
-// drives the throttle PWM to hit the target RPM; a SLOW integrator trims the buck
-// voltage to keep that PWM near a nominal centre, so the voltage self-schedules
-// to whatever the motor's non-linear curve needs at every speed — no multi-point
-// calibration. See speedPulser_voltage.cpp for the hardware layer.
-static float midPidIntegral = 0.0f; // inner-loop integral (normalised freq·s)
-static float midPidPrevErr = 0.0f;  // inner-loop previous error (normalised)
-static float voltTrim = 0.0f;       // slow voltage-trim integrator output (0..1 offset)
+// ===== Drive Control (voltage board) =====
+// Open loop first: the drive for a target speed comes straight from the
+// calibration table (speedPulser_driveCal), so with a few marks captured the
+// needle lands where it should without any feedback at all.
+//
+// With Feedback Enable on (and a tacho, and a table with Hz), ONE slow integrator
+// nudges that drive by a few percent to hold the calibrated tacho Hz against load
+// and temperature drift. It does nothing inside the deadband, nothing below the
+// minimum feedback speed, and is capped at ±vcTrimLimit — so it can't fight the
+// calibration or hunt the way the old fast PWM loop + slow voltage loop did.
+float driveTrim = 0.0f;
 
-void resetMidRanging()
+void resetDriveControl()
 {
-  midPidIntegral = 0.0f;
-  midPidPrevErr = 0.0f;
-  voltTrim = 0.0f;
-  lastPwmFrac = 0.0f;
+  driveTrim = 0.0f;
 }
 
-// Feed-forward voltage seed: linear from vMin at 0 to vMax at top speed.
-static float voltFeedForward(uint16_t targetSpeed)
+// Called on the 100 ms control cadence. Returns the applied raw PWM duty.
+uint16_t applyDriveControl(uint16_t targetSpeed)
 {
-  const uint16_t top = maxSpeed > 0 ? maxSpeed : 1;
-  float frac = (float)targetSpeed / (float)top;
-  if (frac < 0.0f) frac = 0.0f;
-  if (frac > 1.0f) frac = 1.0f;
-  return vcVoltMin + (vcVoltMax - vcVoltMin) * frac;
-}
+  const float PERIOD_S = 0.1f;
 
-// Motor tacho frequency (Hz) expected at a road speed, from the one-point cal.
-static float targetFreqFor(uint16_t targetSpeed, uint16_t scaleFreq)
-{
-  const uint16_t spdSpan = maxSpeed > 0 ? maxSpeed : 1;
-  return (float)targetSpeed * (float)scaleFreq / (float)spdSpan;
-}
-
-// Called on the 100 ms control cadence. Returns the applied raw 12-bit motor duty.
-int16_t applyMidRangingControl(uint16_t targetSpeed)
-{
-  const float PID_PERIOD_S = 0.1f;
-
-  // Target off -> motor off, rail back to minimum, loop state cleared.
   if (targetSpeed == 0)
   {
-    resetMidRanging();
-    setMotorVoltageCmd(vcVoltMin);
+    resetDriveControl();
     pidCorrection = 0;
-    return 0;
+    return applyMotorDrive(0.0f);
   }
 
-  const float measFreq = updateMeasuredFreq();
-  const uint16_t scaleFreq = feedbackMaxFreq > 0 ? feedbackMaxFreq : 1;
+  // Cap at the top calibration mark: past it both the drive and the trim's target
+  // Hz would be extrapolated, and the trim would happily chase an overspin.
+  const uint16_t topSpeed = driveCalTopSpeed();
+  if (topSpeed > 0 && targetSpeed > topSpeed)
+    targetSpeed = topSpeed;
 
-  // No tacho yet: run open-loop on the voltage schedule + nominal PWM. Keeps
-  // measuring so feedbackAvailable can latch and we upgrade to closed loop.
-  if (!feedbackAvailable)
+  const float ffDrive = driveForSpeed(targetSpeed);
+  const bool closedLoop = feedbackEnable && feedbackAvailable && driveCalHzValid() &&
+                          !(feedbackMinSpeed > 0 && targetSpeed < feedbackMinSpeed);
+  float tgtHz = 0.0f;
+  if (closedLoop)
   {
-    setMotorVoltageCmd(voltFeedForward(targetSpeed));
-    lastPwmFrac = vcPwmNominal;
-    pidCorrection = 0;
-    return (int16_t)(vcPwmNominal * (float)PWM_DUTY_MAX + 0.5f);
+    tgtHz = hzForSpeed((float)targetSpeed);
+    const float errHz = tgtHz - measuredFreqHz;
+    const float deadbandHz = feedbackDeadband > 0.0f ? feedbackDeadband : 0.0f;
+    if (tgtHz > 0.5f && fabsf(errHz) > deadbandHz)
+    {
+      driveTrim += vcTrimGain * (errHz / tgtHz) * PERIOD_S;
+      driveTrim = constrain(driveTrim, -vcTrimLimit, vcTrimLimit);
+    }
   }
-
-  // Normalised frequency error (dimensionless) keeps the gains scale-independent.
-  const float err = (targetFreqFor(targetSpeed, scaleFreq) - measFreq) / (float)scaleFreq;
-
-  midPidIntegral += err * PID_PERIOD_S;
-  midPidIntegral = constrain(midPidIntegral, -1.0f, 1.0f); // ±100% authority cap
-  const float deriv = (err - midPidPrevErr) / PID_PERIOD_S;
-  midPidPrevErr = err;
-
-  // Inner output is an ABSOLUTE throttle fraction centred on the nominal.
-  float pwmFrac = vcPwmNominal + vcKp * err + vcKi * midPidIntegral + vcKd * deriv;
-  if (pwmFrac < vcPwmMin) pwmFrac = vcPwmMin;
-  if (pwmFrac > 1.0f)     pwmFrac = 1.0f;
-  lastPwmFrac = pwmFrac;
-
-  // Slow outer loop @ ~500 ms: trim the voltage to pull the PWM back to nominal.
-  static uint8_t outerDiv = 0;
-  if (++outerDiv >= 5)
+  else
   {
-    const float OUTER_PERIOD_S = 0.5f;
-    outerDiv = 0;
-    voltTrim += vcVoltGain * (pwmFrac - vcPwmNominal) * OUTER_PERIOD_S;
-    voltTrim = constrain(voltTrim, -1.0f, 1.0f);
-    setMotorVoltageCmd(voltFeedForward(targetSpeed) + voltTrim); // clamps internally
+    driveTrim = 0.0f;
   }
 
-  uint32_t duty = (uint32_t)(pwmFrac * (float)PWM_DUTY_MAX + 0.5f);
-  if (duty > PWM_DUTY_MAX) duty = PWM_DUTY_MAX;
-  pidCorrection = (int16_t)((pwmFrac - vcPwmNominal) * (float)PWM_DUTY_MAX); // reuse for UI/diag
+  const uint16_t duty = applyMotorDrive(ffDrive * (1.0f + driveTrim));
+  pidCorrection = (int16_t)lroundf(driveTrim * 100.0f); // UI "trim", in %
 
-  static uint8_t midLogDiv = 0;
-  if (++midLogDiv >= 10)
+  static uint8_t logDiv = 0;
+  if (++logDiv >= 10)
   {
-    midLogDiv = 0;
-    DEBUG_FB("mid: tgtF=%.1f measF=%.1f/%u err=%+.3f | pwm=%.0f%% volt=%.0f%% (ff=%.0f%% trim=%+.2f)",
-             targetFreqFor(targetSpeed, scaleFreq), measFreq, scaleFreq, err,
-             pwmFrac * 100.0f, lastVoltageCmd * 100.0f,
-             voltFeedForward(targetSpeed) * 100.0f, voltTrim);
+    logDiv = 0;
+    DEBUG_FB("drive: tgt=%u ff=%.2f V trim=%+.1f%% -> %.2f V (rail %.2f V x %.0f%%) | tgtF=%.1f measF=%.1f%s",
+             targetSpeed, ffDrive, driveTrim * 100.0f, lastDriveV, lastRailCmdV,
+             lastPwmFrac * 100.0f, tgtHz, measuredFreqHz, closedLoop ? "" : " (open loop)");
   }
-  return (int16_t)duty;
+  return duty;
+}
+
+// Speed Test / incoming speed -> setpoint in cluster units.
+static uint16_t toSetpoint(uint16_t speedKph)
+{
+  uint16_t setpoint = applyConfiguredSpeedOffset(speedKph);
+  setpoint = setpoint * speedMultiplier;
+  if (convertToMPH)
+  {
+    setpoint = setpoint * mphFactor;
+  }
+  return setpoint;
 }
 
 // ===== Speed Control Task =====
@@ -603,19 +662,38 @@ int16_t applyMidRangingControl(uint16_t targetSpeed)
 void speedControlTask(void *parameter)
 {
   static uint16_t feedforwardDuty = 0; // calibrated base duty (PID feeds forward from this)
-  static TickType_t lastPidTick = 0;
-  static TickType_t lastMeasTick = 0;
+  static TickType_t lastTick = 0;
   static bool signalPresent = false; // edge-detect input pulse loss/restore for [CTRL] log
   static TickType_t motorRunSince = 0; // when the motor started running with no feedback yet
+  static bool inputTimedOut = false;   // edge-detect so the pulse window is reset ONCE per timeout
   while (1)
   {
+    // Test Board owns the motor PWM and the rail while it runs — stay hands-off.
+    if (boardTestActive)
+    {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
+    // One 100 ms tick for everything that measures or closes a loop: the tacho
+    // and the rail are read here in EVERY mode (so the read-outs never freeze),
+    // and the control laws below run on the same tick with the fresh reading.
+    const bool tick = (xTaskGetTickCount() - lastTick) >= pdMS_TO_TICKS(100);
+    if (tick)
+    {
+      lastTick = xTaskGetTickCount();
+      if (boardHasVoltageControl)
+        updateMotorRail();
+      updateMeasuredFreq();
+    }
+
     // PID may only run when feedback is actually available. If the user enables it
     // but the PCB has no feedback trace (legacy board) the loop stays open-loop, so
     // an unaware user can't accidentally drive a closed loop with no measurement.
     const bool pidActive = feedbackEnable && feedbackAvailable;
 
-    // V4 board with voltage control engaged: the buck rail + PWM are driven by the
-    // mid-ranging law instead of the legacy feed-forward/PID-trim path.
+    // Voltage board with voltage control engaged: the motor is driven from the
+    // drive calibration (rail + PWM together) instead of the legacy duty tables.
     const bool voltageMode = boardHasVoltageControl && voltageControlEnable;
 
     // Flash onboard LED to show incoming pulses; rolls over at averageFilter count
@@ -639,25 +717,40 @@ void speedControlTask(void *parameter)
       dutyCycle = 0;
       rawCount = 0;
       samples.clear();
-      resetHallPulseCounter();
+      // Reset the pulse window only on entry to the timeout. Resetting it every loop
+      // (1 ms) wiped the seed edge before the second edge could arrive, so the first
+      // accepted edge (which is what refreshes lastPulse) never happened and the
+      // input stayed dead until something stalled this task long enough to catch two.
+      if (!inputTimedOut)
+      {
+        resetHallPulseCounter();
+        inputTimedOut = true;
+      }
 
       if (!testSpeedo && !testCal)
       {
-        setMotorDuty(0);
         appliedDutyCycle = 0;
         feedforwardDuty = 0;
         requestedSpeed = 0;
-        measuredSpeed = 0;
         resetPid();
         if (voltageMode)
         {
-          resetMidRanging();
-          setMotorVoltageCmd(vcVoltMin); // drop the rail back to minimum when idle
+          if (tick)
+            applyDriveControl(0); // motor off, rail back to minimum
+        }
+        else
+        {
+          setMotorDuty(0);
         }
       }
       // Speed display updated via API
     }
-    else if (!signalPresent && dutyCycleIncoming > 0 && !testSpeedo && !testCal)
+    else
+    {
+      inputTimedOut = false;
+    }
+
+    if (!inputTimedOut && !signalPresent && dutyCycleIncoming > 0 && !testSpeedo && !testCal)
     {
       DEBUG_CTRL("input signal restored (%lu Hz)", (unsigned long)dutyCycleIncoming);
       signalPresent = true;
@@ -674,16 +767,14 @@ void speedControlTask(void *parameter)
     {
       if (voltageMode)
       {
-        // V4 calibration is manual: the user lifts VOLTAGE and/or PWM until the
-        // needle pegs the top mark, then captures the measured RPM as the one
-        // top point (feedbackMaxFreq). Drive both actuators straight from the UI.
-        setMotorVoltageCmd(tempDutyCycle == 0 ? vcVoltMin : tempVoltageCmd);
-        setMotorDutyRaw(tempDutyCycle);
-        appliedDutyCycle = tempDutyCycle;
-        if ((xTaskGetTickCount() - lastMeasTick) >= pdMS_TO_TICKS(100))
+        // Drive calibration: the user sets the drive directly (rail first, then
+        // PWM below Minimum Rail) until the needle sits on a mark, then captures it.
+        if (tick)
         {
-          lastMeasTick = xTaskGetTickCount();
-          updateMeasuredFreq(); // keep the RPM readout live for capture
+          const uint16_t d = applyMotorDrive(tempDriveV);
+          tempDutyCycle = d;
+          appliedDutyCycle = d;
+          pidCorrection = 0;
         }
       }
       // Cal building is open-loop increase by default (no PID).
@@ -691,15 +782,9 @@ void speedControlTask(void *parameter)
       // finished cal can be verified closed-loop without leaving the builder.
       else if (pidActive)
       {
-        if ((xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
+        if (tick)
         {
-          lastPidTick = xTaskGetTickCount();
-          uint16_t setpoint = applyConfiguredSpeedOffset(tempSpeed);
-          setpoint = setpoint * speedMultiplier;
-          if (convertToMPH)
-          {
-            setpoint = setpoint * mphFactor;
-          }
+          uint16_t setpoint = toSetpoint(tempSpeed);
           requestedSpeed = setpoint;
           feedforwardDuty = speedToPwmDuty(setpoint);
           uint16_t trimmed = (uint16_t)applyFeedbackTrim(setpoint, feedforwardDuty);
@@ -716,20 +801,12 @@ void speedControlTask(void *parameter)
     {
       if (voltageMode)
       {
-        // V4 closed-loop bench test: hold the set speed via the mid-ranging law.
-        if ((xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
+        // Voltage-board bench test: the set speed through the drive calibration.
+        if (tick)
         {
-          lastPidTick = xTaskGetTickCount();
-          uint16_t setpoint = applyConfiguredSpeedOffset(tempSpeed);
-          setpoint = setpoint * speedMultiplier;
-          if (convertToMPH)
-          {
-            setpoint = setpoint * mphFactor;
-          }
+          uint16_t setpoint = toSetpoint(tempSpeed);
           requestedSpeed = setpoint;
-          uint16_t d = (uint16_t)applyMidRangingControl(setpoint);
-          setMotorDutyRaw(d);
-          appliedDutyCycle = d;
+          appliedDutyCycle = applyDriveControl(setpoint);
         }
       }
       else if (pidActive)
@@ -737,15 +814,9 @@ void speedControlTask(void *parameter)
         // Closed-loop bench test: hold the set speed and let the PID trim the
         // duty from the GPIO4 feedback, so you can confirm it fights a load
         // without needing a live speed input
-        if ((xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
+        if (tick)
         {
-          lastPidTick = xTaskGetTickCount();
-          uint16_t setpoint = applyConfiguredSpeedOffset(tempSpeed);
-          setpoint = setpoint * speedMultiplier;
-          if (convertToMPH)
-          {
-            setpoint = setpoint * mphFactor;
-          }
+          uint16_t setpoint = toSetpoint(tempSpeed);
           requestedSpeed = setpoint;
           feedforwardDuty = speedToPwmDuty(setpoint); // raw 12-bit feed-forward base
           uint16_t trimmed = (uint16_t)applyFeedbackTrim(setpoint, feedforwardDuty);
@@ -799,19 +870,13 @@ void speedControlTask(void *parameter)
 
           // Speed display updated via API /api/status
           // Live speed value available in dutyCycle variable
-          uint16_t finalSpeed = applyConfiguredSpeedOffset(dutyCycle);
-          finalSpeed = finalSpeed * speedMultiplier;
-          if (convertToMPH)
-          {
-            finalSpeed = finalSpeed * mphFactor;
-          }
-          requestedSpeed = finalSpeed;                      // offset-applied target speed (PID setpoint)
+          requestedSpeed = toSetpoint(dutyCycle);           // offset-applied target speed (PID setpoint)
           feedforwardDuty = speedToPwmDuty(requestedSpeed); // raw 12-bit feed-forward base (custom-cal aware)
           if (!voltageMode && !pidActive)
           {
             // Legacy open-loop: drive the calibrated feed-forward directly.
-            // (V4 voltage mode and the closed-loop PID both drive on the 100 ms
-            // cadence below, so don't fight them here.)
+            // (Voltage mode and the closed-loop PID both drive on the 100 ms
+            // tick below, so don't fight them here.)
             setMotorDutyRaw(feedforwardDuty);
             appliedDutyCycle = feedforwardDuty;
             DEBUG_CTRL("open-loop: %u kph -> pwm=%u/%u", requestedSpeed,
@@ -822,34 +887,20 @@ void speedControlTask(void *parameter)
         }
       }
 
-      // Closed-loop trim: every 100 ms nudge the base duty so measured speed
-      // (GPIO4 feedback) tracks the requested speed. Uses calibration as feed-forward.
-      if (voltageMode && (xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
+      // Every 100 ms: the drive calibration (voltage board) or the legacy PID trim.
+      if (!inputTimedOut && tick)
       {
-        lastPidTick = xTaskGetTickCount();
-        uint16_t d = (uint16_t)applyMidRangingControl(requestedSpeed);
-        setMotorDutyRaw(d);
-        appliedDutyCycle = d;
+        if (voltageMode)
+        {
+          appliedDutyCycle = applyDriveControl(requestedSpeed);
+        }
+        else if (pidActive)
+        {
+          uint16_t trimmed = (uint16_t)applyFeedbackTrim(requestedSpeed, feedforwardDuty);
+          setMotorDutyRaw(trimmed);
+          appliedDutyCycle = trimmed;
+        }
       }
-      else if (pidActive && (xTaskGetTickCount() - lastPidTick) >= pdMS_TO_TICKS(100))
-      {
-        lastPidTick = xTaskGetTickCount();
-        uint16_t trimmed = (uint16_t)applyFeedbackTrim(requestedSpeed, feedforwardDuty);
-        setMotorDutyRaw(trimmed);
-        appliedDutyCycle = trimmed;
-      }
-    }
-
-    // Keep the motor feedback readout live whenever the PID isn't running (feedback off,
-    // or feedback not yet available) in any mode so the speed display and cal-capture
-    // auto-calibration always have a fresh measurement — and so feedbackAvailable can
-    // latch as soon as a real tacho signal appears. With the PID active,
-    // applyFeedbackTrim already measures; in V4 voltage mode applyMidRangingControl does.
-    if (!pidActive && !voltageMode &&
-        (xTaskGetTickCount() - lastMeasTick) >= pdMS_TO_TICKS(100))
-    {
-      lastMeasTick = xTaskGetTickCount();
-      updateMeasuredFreq();
     }
 
     // Feedback-availability signalling for the UI: once the motor has been running

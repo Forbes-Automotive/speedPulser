@@ -219,6 +219,9 @@ void calBuilderInit() {
 // ===== Export / import =====================================================
 void calExportJson(String &out) {
   JsonDocument doc;
+  doc["type"]     = PWM_CAL_FILE_TYPE;
+  doc["about"]    = "PWM calibration (legacy board, or Voltage Control off): needle speeds vs "
+                    "motor PWM duty on the fixed ~9 V supply. Not a voltage calibration.";
   doc["name"]     = customCalName;
   doc["unit"]     = customCalUnitMph ? "mph" : "kmh";
   doc["pwmBits"]  = PWM_RESOLUTION;
@@ -244,6 +247,7 @@ void calExportCArray(String &out) {
   out  = "// ";
   out += customCalName;
   out += customCalUnitMph ? " - array in mph\n" : " - array in kmh\n";
+  out += "// PWM calibration preset (legacy board / Voltage Control off): speed per PWM duty step\n";
   out += "uint16_t " + arr + "[] PROGMEM = {";
   for (uint16_t i = 0; i < 385; i++) {
     if (i) out += ", ";
@@ -263,6 +267,10 @@ bool calImportJson(const char *json) {
     DEBUG_WEB("customCal: import parse failed");
     return false;
   }
+
+  // Files from before V5.01 have no "type"; anything else tagged isn't ours.
+  const char *type = doc["type"] | PWM_CAL_FILE_TYPE;
+  if (strcmp(type, PWM_CAL_FILE_TYPE) != 0) return false;
 
   JsonArray pts = doc["points"].as<JsonArray>();
   if (pts.isNull()) return false;

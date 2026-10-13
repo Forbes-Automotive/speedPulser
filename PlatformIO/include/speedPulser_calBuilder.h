@@ -53,7 +53,9 @@ void buildCustomCalTable();     // fill motorPerformance[] from the current anch
 // the first speed point's speed (dead-zone) and holds the last point's duty above it.
 uint32_t customSpeedToDuty12(uint16_t speed);
 
-// Export / Import as Text
+// Export / Import as Text. Files carry "type": PWM_CAL_FILE_TYPE (older files
+// have no type and are taken as PWM); voltage cals use DRIVE_CAL_FILE_TYPE.
+#define PWM_CAL_FILE_TYPE "speedpulser-pwm-cal"
 void calExportJson(String &out);    // shareable round-trippable JSON
 void calExportCArray(String &out);  // drop-in motorPerformanceN[] C source block
 bool calImportJson(const char *json);  // parse anchors from exported JSON

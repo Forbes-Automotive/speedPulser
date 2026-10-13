@@ -176,6 +176,7 @@ extern float pidKi;               // PID integral gain
 extern float pidKd;               // PID derivative gain
 extern float feedbackDeadband;    // PID deadband (Hz); within this error P/D are silenced (integral still trims). 0 = off
 extern uint16_t feedbackMaxFreq;  // feedback pulses/sec that correspond to maxSpeed
+extern bool topSpeedCaptured;     // true once the top speed has been captured on THIS motor (voltage-board closed loop)
 extern uint16_t feedbackMinSpeed; // kph; below this target the loop runs open-loop (anti-hunt)
 extern uint16_t measuredSpeed;    // measured motor speed from feedback (kph)
 extern int16_t pidCorrection;     // current PID duty correction (debug/UI)
@@ -193,10 +194,14 @@ extern uint16_t tempSpeed;
 #define pinFeedback 4    // motor speed feedback pulse input (interrupt counter; C3 has no PCNT)
 #define pinOnboardLED 8  // for feedback for input checking / flash LED on input.  ESP32 C3 is Pin 8
 
-// ===== V4 board — buck voltage control (auto-detected at boot) =====
-#define pinBoardVersion 3 // 1k to GND on the V4 board -> reads LOW = new board; legacy board floats HIGH (INPUT_PULLUP)
+// ===== Voltage board — buck voltage control (auto-detected at boot) =====
+// Confirmed against PCBs/rev6-allConfirmed (SpeedPulserV5, ESP32-C3 SuperMini U9):
+//   GPIO1 V_MOT_SENSE, GPIO2 ESP_MOTOR, GPIO3 R22 1k strap, GPIO4 ESP_MFB, GPIO5 ESP_SPEEDPULSE,
+//   GPIO6 V_ADJ, GPIO7 EN_ADJ (R7 10k pull-down), GPIO10 ESP_MOTOR_DIR; GPIO0/8/9/20/21 unused.
+#define pinBoardVersion 3 // R22 1k to GND on the voltage board -> reads LOW = new board; legacy board floats HIGH (INPUT_PULLUP)
 #define pinVoltageAdjust 6 // V_ADJ: PWM "DAC" injected into the TPS62933 FB node (INVERSE: higher duty -> lower motor volts)
 #define pinBuckEnable 7    // buck EN: drive HIGH to enable the adjustable motor-supply buck (default LOW = off at boot)
+#define pinMotorSense 1    // V_MOT_SENSE: motor rail via R24 39k / R25 10k (+C33 100 nF) -> ADC1_CH1 (rev2+ boards)
 
 #define wifiHostName "SpeedPulser" // the WiFi name
 

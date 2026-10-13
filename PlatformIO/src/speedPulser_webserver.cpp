@@ -4,6 +4,7 @@
 #include "speedPulser_control.h"
 #include "speedPulser_calBuilder.h"
 #include "speedPulser_voltage.h"
+#include "speedPulser_driveCal.h"
 #include "ota_manager.h"
 #include "wifi_manager.h"
 
@@ -38,6 +39,9 @@ void setupWebServer() {
   // GET /api/calcurve - Return the active calibration curve (duty vs speed)
   server.on("/api/calcurve", HTTP_GET, handleGetCalCurve);
 
+  // GET /api/boardtest - Board detection + Test Board result (start it via /api/action)
+  server.on("/api/boardtest", HTTP_GET, handleGetBoardTest);
+
   // POST /api/control - Update settings
   server.on("/api/control", HTTP_POST, 
     [](AsyncWebServerRequest *request) {},  // empty onRequest
@@ -68,6 +72,67 @@ void setupWebServer() {
   DEBUG_WEB("web server started");
 }
 
+// The drive calibration marks (voltage board), for /api/settings and the
+// capture/delete responses.
+static void addDriveCal(JsonDocument &doc) {
+  JsonArray pts = doc["driveCal"].to<JsonArray>();
+  for (uint8_t i = 0; i < driveCalCount; i++) {
+    JsonObject p = pts.add<JsonObject>();
+    p["speed"] = driveCal[i].speed;
+    p["hz"] = driveCal[i].hz;
+    p["drive"] = driveCal[i].drive;
+    p["rail"] = driveCal[i].rail;
+    p["pwm"] = driveCal[i].pwm;
+  }
+  doc["driveCalHz"] = driveCalHzValid();
+}
+
+// What is actually driving the motor, for the "Cal:" banner. With voltage control
+// on, the PWM preset is idle and the drive marks decide the speed, so say so.
+static bool voltageCalActive() {
+  return boardHasVoltageControl && voltageControlEnable;
+}
+
+static String activeCalText() {
+  if (!voltageCalActive()) return getCalibrationText(motorPerformanceVal);
+  if (driveCalCount == 0) return "Voltage (not calibrated)";
+  return "Voltage (" + String(driveCalCount) + (driveCalCount == 1 ? " mark, " : " marks, ") +
+         String(driveCal[0].speed) + "-" + String(driveCalTopSpeed()) + ")";
+}
+
+static void addCalText(JsonDocument &doc) {
+  doc["calibrationText"] = activeCalText();
+  doc["calMode"] = voltageCalActive() ? "voltage" : "pwm";
+}
+
+// Live voltage-board read-outs. Shared by /api/status AND /api/test-status, so the
+// rail, drive and tacho keep updating while Speed Test is running.
+static void addVoltageStatus(JsonDocument &doc) {
+  doc["boardHasVoltageControl"] = boardHasVoltageControl;
+  doc["voltageControlEnable"] = voltageControlEnable;
+  doc["buckEnabled"] = buckEnabled;
+  doc["testCal"] = testCal;
+  if (!boardHasVoltageControl) return;
+  doc["voltageCmd"] = lastVoltageCmd;   // 0..1 of the rail window (dashboard chart)
+  doc["pwmFrac"] = lastPwmFrac;         // 0..1 motor PWM
+  doc["driveV"] = lastDriveV;           // applied drive (V = rail x PWM)
+  doc["driveMaxV"] = driveMaxV();
+  doc["tempDriveV"] = tempDriveV;       // calibration drive the user set
+  doc["driveTrimPct"] = driveTrim * 100.0f;
+  doc["railCmdV"] = lastRailCmdV;       // commanded rail (V)
+  doc["motorRailV"] = motorRailV;       // measured rail (V) — trust it once railSenseOk
+  doc["railSenseOk"] = railFitValid;
+  doc["railLimited"] = railLimited();
+  doc["boardTestRunning"] = (bool)boardTestActive;
+  doc["measuredFreqHz"] = measuredFreqHz;
+  float fbMeanHz, fbSpreadPct, fbDriftHz;
+  const bool fbWin = feedbackHzWindow(fbMeanHz, fbSpreadPct, fbDriftHz);
+  doc["fbHzAvg"] = fbWin ? fbMeanHz : 0.0f;          // capture-window mean (Hz)
+  doc["fbHzSpread"] = fbWin ? fbSpreadPct : -1.0f;   // % (max-min)/mean; -1 = not turning
+  doc["fbHzDrift"] = fbWin ? fbDriftHz : 0.0f;       // Hz the mean moved across the window
+  doc["fbStable"] = fbWin && feedbackHzSteady(fbMeanHz, fbSpreadPct, fbDriftHz);
+}
+
 /**
  * GET /api/settings - Return all current settings as JSON
  */
@@ -78,7 +143,7 @@ void handleGetSettings(AsyncWebServerRequest *request) {
   doc["hasNeedleSweep"] = hasNeedleSweep;
   doc["sweepSpeed"] = sweepSpeed;
   doc["motorPerformanceVal"] = motorPerformanceVal;
-  doc["calibrationText"] = getCalibrationText(motorPerformanceVal);
+  addCalText(doc);
   doc["maxSpeed"] = maxSpeed;
   doc["maxFreqHall"] = maxFreqHall;
   doc["speedOffset"] = speedOffset;
@@ -101,17 +166,20 @@ void handleGetSettings(AsyncWebServerRequest *request) {
   doc["feedbackMaxFreq"] = feedbackMaxFreq;
   doc["feedbackMinSpeed"] = feedbackMinSpeed;
 
-  // V4 buck voltage control
+  // Buck voltage control (voltage board)
   doc["boardHasVoltageControl"] = boardHasVoltageControl;
   doc["voltageControlEnable"] = voltageControlEnable;
+  doc["railFloorV"] = RAIL_V_FLOOR;   // hardware rail window (V)
+  doc["railCeilV"] = RAIL_V_CEIL;
+  doc["railSenseOk"] = railFitValid;
+  doc["boardTestCode"] = boardTestCode;
+  doc["topSpeedCaptured"] = topSpeedCaptured;
   doc["vcPwmNominal"] = vcPwmNominal;
-  doc["vcPwmMin"] = vcPwmMin;
-  doc["vcVoltMin"] = vcVoltMin;
-  doc["vcVoltMax"] = vcVoltMax;
-  doc["vcVoltGain"] = vcVoltGain;
-  doc["vcKp"] = vcKp;
-  doc["vcKi"] = vcKi;
-  doc["vcKd"] = vcKd;
+  doc["vcRailMaxV"] = vcRailMaxV;
+  doc["vcTrimGain"] = vcTrimGain;
+  doc["vcTrimLimit"] = vcTrimLimit;
+  doc["driveMaxV"] = driveMaxV();
+  addDriveCal(doc);
 
   // Test mode settings
   doc["testSpeedo"] = testSpeedo;
@@ -164,7 +232,7 @@ void handleGetStatus(AsyncWebServerRequest *request) {
   doc["dutyCycleIncoming"] = dutyCycleIncoming;
   doc["incomingSpeed"] = requestedSpeed;
   doc["motorPerformanceVal"] = motorPerformanceVal;
-  doc["calibrationText"] = getCalibrationText(motorPerformanceVal);
+  addCalText(doc);
   doc["rawCount"] = rawCount;
   doc["ledCounter"] = ledCounter;
   doc["tempDutyCycle"] = tempDutyCycle;
@@ -181,13 +249,8 @@ void handleGetStatus(AsyncWebServerRequest *request) {
   doc["feedbackAvailable"] = feedbackAvailable;
   doc["feedbackMissing"] = feedbackMissing;
 
-  // V4 buck voltage control (live)
-  doc["boardHasVoltageControl"] = boardHasVoltageControl;
-  doc["voltageControlEnable"] = voltageControlEnable;
-  doc["buckEnabled"] = buckEnabled;
-  doc["voltageCmd"] = lastVoltageCmd;   // 0..1 (1 = max motor volts)
-  doc["pwmFrac"] = lastPwmFrac;         // 0..1 throttle fraction
-  doc["tempVoltageCmd"] = tempVoltageCmd;
+  // Buck voltage control (live, voltage board)
+  addVoltageStatus(doc);
 
   String response;
   serializeJson(doc, response);
@@ -204,7 +267,7 @@ void handleGetTestStatus(AsyncWebServerRequest *request) {
   doc["tempSpeed"] = tempSpeed;
   doc["appliedDutyCycle"] = appliedDutyCycle;
   doc["motorPerformanceVal"] = motorPerformanceVal;
-  doc["calibrationText"] = getCalibrationText(motorPerformanceVal);
+  addCalText(doc);
   doc["speedOffsetType"] = useSpeedOffsetCurve ? "Curve" : "Global";
   doc["currentSpeedOffset"] = currentSpeedOffset;
   doc["measuredSpeed"] = measuredSpeed;
@@ -213,10 +276,7 @@ void handleGetTestStatus(AsyncWebServerRequest *request) {
   doc["feedbackAvailable"] = feedbackAvailable;
   doc["feedbackMissing"] = feedbackMissing;
 
-  doc["boardHasVoltageControl"] = boardHasVoltageControl;
-  doc["buckEnabled"] = buckEnabled;
-  doc["voltageCmd"] = lastVoltageCmd;
-  doc["pwmFrac"] = lastPwmFrac;
+  addVoltageStatus(doc);
 
   String response;
   serializeJson(doc, response);
@@ -311,6 +371,7 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     uint16_t v = value.as<uint16_t>();
     if (v < 10) v = 10;  // never let the feedback freq-scale divisor collapse to ~0
     maxSpeed = v;
+    syncFeedbackMaxFreq(); // a captured top point is in cluster units: keep Hz-at-maxSpeed in step
   } else if (strcmp(key, "maxFreqHall") == 0) {
     maxFreqHall = value.as<uint16_t>();
   } else if (strcmp(key, "speedOffset") == 0) {
@@ -347,19 +408,36 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     }
   } else if (strcmp(key, "tempSpeed") == 0) {
     tempSpeed = value.as<uint16_t>();
-    if (testSpeedo) {
-      testSpeed();  // apply immediately, don't wait for next task cycle
+    // Legacy duty path: apply immediately. The voltage board picks it up on the
+    // next 100 ms drive tick (writing a legacy duty here would glitch the needle).
+    if (testSpeedo && !(boardHasVoltageControl && voltageControlEnable)) {
+      testSpeed();
     }
   } else if (strcmp(key, "testCal") == 0) {
+    if (boardTestActive) {
+      request->send(409, "application/json", "{\"error\":\"Board test running\"}");
+      return;
+    }
+    const bool wasCal = testCal;
     testCal = value.as<bool>();
     // Same hall lockout for calibration mode.
     dutyCycleIncoming = 0;
     requestedSpeed = 0;
     resetMedianFilter();
+    // Voltage-board calibration always starts with the motor stopped (drive 0):
+    // the user raises the drive until the needle sits on a mark.
+    if (testCal && !wasCal && boardHasVoltageControl) {
+      tempDriveV = 0.0f;
+      resetDriveControl();
+    }
     if (!testCal) {
       dutyCycle = 0;
       appliedDutyCycle = 0;
-      setMotorDuty(0);
+      if (boardHasVoltageControl && voltageControlEnable) {
+        applyMotorDrive(0.0f);
+      } else {
+        setMotorDuty(0);
+      }
     }
   } else if (strcmp(key, "averageFilter") == 0) {
     uint8_t newVal = value.as<uint8_t>();
@@ -385,33 +463,25 @@ void handlePostControl(AsyncWebServerRequest *request, uint8_t *data, size_t len
     feedbackMinSpeed = value.as<uint16_t>();
   } else if (strcmp(key, "voltageControlEnable") == 0) {
     voltageControlEnable = value.as<bool>();
-    resetMidRanging();
-    // On the V4 board the buck stays enabled either way; when voltage control is
-    // switched off, park the rail at full volts so the legacy PWM path behaves.
+    resetDriveControl();
+    // On the voltage board the buck stays enabled either way; when voltage control
+    // is switched off, park the rail at the legacy ~9 V so the preset PWM tables behave.
     if (boardHasVoltageControl && !voltageControlEnable) {
-      setMotorVoltageCmd(vcVoltMax);
+      setMotorRailVolts(RAIL_V_LEGACY);
     }
-  } else if (strcmp(key, "tempVoltageCmd") == 0) {
-    float v = value.as<float>();
-    if (v < 0.0f) v = 0.0f;
-    if (v > 1.0f) v = 1.0f;
-    tempVoltageCmd = v;   // applied live in calibration mode by the control task
+  } else if (strcmp(key, "tempDriveV") == 0) {
+    // Calibration drive (V) from the UI's -/+ buttons and slider; applied by the
+    // control task on its next 100 ms tick.
+    tempDriveV = constrain(value.as<float>(), 0.0f, driveMaxV());
   } else if (strcmp(key, "vcPwmNominal") == 0) {
-    vcPwmNominal = constrain(value.as<float>(), 0.2f, 0.95f);
-  } else if (strcmp(key, "vcPwmMin") == 0) {
-    vcPwmMin = constrain(value.as<float>(), 0.0f, 0.9f);
-  } else if (strcmp(key, "vcVoltMin") == 0) {
-    vcVoltMin = constrain(value.as<float>(), 0.0f, 1.0f);
-  } else if (strcmp(key, "vcVoltMax") == 0) {
-    vcVoltMax = constrain(value.as<float>(), 0.0f, 1.0f);
-  } else if (strcmp(key, "vcVoltGain") == 0) {
-    vcVoltGain = value.as<float>();
-  } else if (strcmp(key, "vcKp") == 0) {
-    vcKp = value.as<float>();
-  } else if (strcmp(key, "vcKi") == 0) {
-    vcKi = value.as<float>();
-  } else if (strcmp(key, "vcKd") == 0) {
-    vcKd = value.as<float>();
+    vcPwmNominal = constrain(value.as<float>(), 0.2f, 1.0f);
+  } else if (strcmp(key, "vcRailMaxV") == 0) {
+    vcRailMaxV = constrain(value.as<float>(), RAIL_V_FLOOR, RAIL_V_CEIL);
+  } else if (strcmp(key, "vcTrimGain") == 0) {
+    vcTrimGain = constrain(value.as<float>(), 0.0f, 5.0f);
+  } else if (strcmp(key, "vcTrimLimit") == 0) {
+    vcTrimLimit = constrain(value.as<float>(), 0.0f, 0.5f);
+    driveTrim = constrain(driveTrim, -vcTrimLimit, vcTrimLimit);
   } else {
     request->send(400, "application/json", "{\"error\":\"Unknown setting\"}");
     return;
@@ -467,15 +537,61 @@ void handlePostAction(AsyncWebServerRequest *request, uint8_t *data, size_t len,
       tempDutyCycle = tempDutyCycle + 1;
     }
   } else if (strcmp(action, "captureTopSpeed") == 0) {
-    // V4 one-point calibration: with the needle pegged at the top mark (maxSpeed),
-    // latch the measured motor RPM as feedbackMaxFreq. The linear gauge then scales
-    // every lower speed off this single point.
-    if (!calibrateFeedbackMaxFreq(maxSpeed)) {
-      request->send(409, "application/json",
-                    "{\"error\":\"No motor RPM measured — raise voltage/PWM until the motor spins\"}");
+    // Legacy board: one-point tacho scale (Hz at Max Speed).
+    uint16_t speed = doc["speed"] | maxSpeed;
+    if (speed < 10 || speed > 400) {
+      request->send(400, "application/json", "{\"error\":\"Speed must be 10-400\"}");
       return;
     }
-    DEBUG_WEB("captureTopSpeed: feedbackMaxFreq=%u Hz @ %u", feedbackMaxFreq, maxSpeed);
+    if (!calibrateFeedbackMaxFreq(speed)) {
+      request->send(409, "application/json",
+                    "{\"error\":\"No motor RPM measured — raise PWM until the motor spins\"}");
+      return;
+    }
+    DEBUG_WEB("captureTopSpeed (legacy): feedbackMaxFreq=%u Hz @ %u", feedbackMaxFreq, maxSpeed);
+  } else if (strcmp(action, "calAddPoint") == 0 || strcmp(action, "calDeletePoint") == 0 ||
+             strcmp(action, "calClearPoints") == 0) {
+    // Voltage-board drive calibration marks. Each answers with the updated table.
+    if (!boardHasVoltageControl) {
+      request->send(409, "application/json", "{\"error\":\"No voltage control on this board\"}");
+      return;
+    }
+    if (strcmp(action, "calAddPoint") == 0) {
+      if (!testCal) {
+        request->send(409, "application/json", "{\"error\":\"Enable Calibration Mode first\"}");
+        return;
+      }
+      const uint8_t r = driveCalCapture(doc["speed"] | 0);
+      if (r != DCAL_OK) {
+        JsonDocument err;
+        err["error"] = driveCalErrorText(r);
+        String body;
+        serializeJson(err, body);
+        request->send(409, "application/json", body);
+        return;
+      }
+    } else if (strcmp(action, "calDeletePoint") == 0) {
+      driveCalDelete(doc["index"] | 255);
+    } else {
+      driveCalClear();
+    }
+    JsonDocument out;
+    out["status"] = "ok";
+    addDriveCal(out);
+    String body;
+    serializeJson(out, body);
+    request->send(200, "application/json", body);
+    return;
+  } else if (strcmp(action, "boardTest") == 0) {
+    if (testCal || testSpeedo || testNeedleSweep) {
+      request->send(409, "application/json",
+                    "{\"error\":\"Turn off Speed Test / Calibration Mode first\"}");
+      return;
+    }
+    if (!startBoardTest()) {
+      request->send(409, "application/json", "{\"error\":\"Board test already running\"}");
+      return;
+    }
   } else {
     request->send(400, "application/json", "{\"error\":\"Unknown action\"}");
     return;
@@ -483,6 +599,32 @@ void handlePostAction(AsyncWebServerRequest *request, uint8_t *data, size_t len,
 
   DEBUG_WEB("action executed: %s", action);
   request->send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
+/**
+ * GET /api/boardtest - Board detection (GPIO3 strap, read at boot) and the last
+ * Test Board result: per-step target/measured rail and the fitted duty->volts line.
+ */
+void handleGetBoardTest(AsyncWebServerRequest *request) {
+  JsonDocument doc;
+  doc["boardHasVoltageControl"] = boardHasVoltageControl;
+  doc["running"] = (bool)boardTestActive;
+  doc["code"] = boardTestCode;
+  doc["text"] = boardTestText(boardTestCode);
+  doc["pass"] = (boardTestCode == BT_PASS);
+  doc["railSenseOk"] = railFitValid;
+  doc["fitV0"] = railFitV0;
+  doc["fitSlope"] = railFitSlope;
+  doc["motorRailV"] = motorRailV;
+  JsonArray pts = doc["points"].to<JsonArray>();
+  for (uint8_t i = 0; i < BOARD_TEST_POINTS; i++) {
+    JsonObject p = pts.add<JsonObject>();
+    p["target"] = boardTestTargetV[i];
+    p["measured"] = boardTestMeasV[i];
+  }
+  String response;
+  serializeJson(doc, response);
+  request->send(200, "application/json", response);
 }
 
 // ===========================================================================
@@ -528,12 +670,28 @@ void handleGetCal(AsyncWebServerRequest *request) {
  *                        setName|apply|save|export|import", ... }
  */
 void handlePostCal(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+  // An imported file can span several TCP chunks: collect the whole body before
+  // parsing. The buffer rides on _tempObject, which the server frees with the request.
+  const size_t CAL_BODY_MAX = 16384;
+  if (total > CAL_BODY_MAX) {
+    if (index == 0) request->send(413, "application/json", "{\"error\":\"File too large\"}");
+    return;
+  }
+  if (index == 0) {
+    request->_tempObject = malloc(total);
+  }
+  uint8_t *body = (uint8_t *)request->_tempObject;
+  if (!body) {
+    if (index + len == total) request->send(500, "application/json", "{\"error\":\"Out of memory\"}");
+    return;
+  }
+  memcpy(body + index, data, len);
   if (index + len != total) {
     return;  // Wait for complete payload
   }
 
   JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, data, len);
+  DeserializationError error = deserializeJson(doc, body, total);
   if (error) {
     request->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
     return;
@@ -601,8 +759,14 @@ void handlePostCal(AsyncWebServerRequest *request, uint8_t *data, size_t len, si
     String json, carray;
     calExportJson(json);
     calExportCArray(carray);
-    out["json"]   = json;
-    out["carray"] = carray;
+    out["json"]   = json;     // PWM calibration (legacy)
+    out["carray"] = carray;   // PWM calibration as a firmware preset
+    if (boardHasVoltageControl) {
+      String voltage;
+      driveCalExportJson(voltage);
+      out["voltage"] = voltage;          // voltage (drive) calibration
+      out["voltageMarks"] = driveCalCount;
+    }
     String response;
     serializeJson(out, response);
     request->send(200, "application/json", response);
@@ -610,8 +774,32 @@ void handlePostCal(AsyncWebServerRequest *request, uint8_t *data, size_t len, si
 
   } else if (strcmp(op, "import") == 0) {
     const char *json = doc["json"];
+    // One Import button for both kinds: the file's "type" says which it is.
+    if (json && strstr(json, DRIVE_CAL_FILE_TYPE)) {
+      if (!boardHasVoltageControl) {
+        request->send(409, "application/json",
+                      "{\"error\":\"This is a voltage calibration: this board has no voltage control\"}");
+        return;
+      }
+      const char *err = nullptr;
+      if (!driveCalImportJson(json, err)) {
+        JsonDocument e;
+        e["error"] = err;
+        String body;
+        serializeJson(e, body);
+        request->send(400, "application/json", body);
+        return;
+      }
+      JsonDocument out;
+      out["kind"] = "voltage";
+      addDriveCal(out);
+      String body;
+      serializeJson(out, body);
+      request->send(200, "application/json", body);
+      return;
+    }
     if (!json || !calImportJson(json)) {
-      request->send(400, "application/json", "{\"error\":\"Import failed\"}");
+      request->send(400, "application/json", "{\"error\":\"Import failed: not a SpeedPulser calibration file\"}");
       return;
     }
 

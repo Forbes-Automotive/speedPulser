@@ -58,16 +58,17 @@ void setup()
     basicInit();     // Initialize GPIO, LEDC PWM, interrupts
     setMotorDuty(0); // Motor off initially
 
-    // V4 board only: bring up the adjustable motor supply. The buck must be enabled
-    // for the motor to have any voltage, so enable it regardless of the control
-    // mode — starting at the minimum (safe) rail with the motor PWM already off.
+    // Voltage board only: bring up the adjustable motor supply. The buck must be
+    // enabled for the motor to have any voltage, so enable it regardless of the
+    // control mode — starting at the minimum (safe) rail with the motor PWM already off.
     initVoltageControl();
     if (boardHasVoltageControl)
     {
         enableBuck();
         if (!voltageControlEnable)
         {
-            setMotorVoltageCmd(vcVoltMax); // legacy PWM behaviour: hold full motor volts
+            // Legacy PWM behaviour: hold the fixed ~9 V the duty presets were captured on.
+            setMotorRailVolts(RAIL_V_LEGACY);
         }
     }
 

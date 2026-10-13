@@ -1,7 +1,7 @@
 #ifndef SPEED_PULSER_VER_H
 #define SPEED_PULSER_VER_H
 
-#define FW_VERSION "4.02" // OTA overhaul: shared ota_manager/wifi_manager v2, guided GitHub update, bridge mode, recovery page
+#define FW_VERSION "5.01" // V5 PCB: drive calibration (multi-mark), open-loop drive + gentle feedback trim
 #define VERSION FW_VERSION  // legacy name used throughout this project
 
 /*
@@ -94,6 +94,75 @@ V4.02 - OTA overhaul (shared ota_manager / wifi_manager v2 + data/ota.js, ported
         tools/make_release.py) plus a Home WiFi (bridge mode) card; power_manager
         holds WiFi up while any browser is active. Assets served no-cache (ETag)
         instead of the hand-bumped ?v=.
+
+V5.00 - V5 PCB (PCBs/rev6-allConfirmed) support: voltage feedback + simple calibration.
+      - GPIO map confirmed against the rev6 netlist: GPIO1 V_MOT_SENSE (new), GPIO2 motor,
+        GPIO3 R22 1k board strap, GPIO4 feedback, GPIO5 speed in, GPIO6 V_ADJ, GPIO7 EN_ADJ,
+        GPIO10 direction. Board detection stays the passive GPIO3 strap read at boot.
+      - motor-rail read-back: GPIO1 (ADC1, R24 39k / R25 10k) read every 100 ms and shown
+        as the measured rail on the Advanced and Calibration pages.
+      - "Test Board" (Advanced page): with the motor stopped, steps the rail to 5 / 7.5 / 10 V
+        and reads each back, proving the V_ADJ injection AND the sense divider. Pass/fail
+        and readings are stored; a pass also stores this board's own duty->volts line, so
+        rail commands land on the volts asked for.
+      - rail commands are now in VOLTS across 3.0-12.0 V (the 0..1 command spans that
+        window). The rail ceiling is 12 V (was 0 % V_ADJ = ~13.8 V / dropout); with voltage
+        control off the rail holds 9 V, the old fixed supply the duty presets were
+        captured on.
+      - voltage-board calibration simplified: Calibration Mode holds the PWM at Nominal PWM
+        (default now 80 %) and the user only raises the RAIL (-/+ volt buttons) until the
+        needle sits on a top mark, enters the speed shown, and captures. The tacho Hz is
+        averaged over ~1 s and refused while still settling. The point (speed, Hz, rail,
+        PWM) is stored in cluster units; every lower speed is linear to zero
+        (needle ∝ RPM), and the captured rail seeds the voltage feed-forward.
+      - the legacy multi-point Calibration Builder is unchanged and still the only
+        calibration shown on boards without voltage injection.
+      - calibration rail now spans the full 3-12 V regardless of Minimum/Maximum Voltage
+        (those only bound the running loop), and the legacy 9 V hold ignores them too.
+        A top point captured below Minimum Voltage drops Minimum Voltage to 3 V so the
+        running loop can follow it. The rail slider sends one request at a time (latest
+        value wins) instead of one per input event, so it no longer snaps back.
+
+V5.01 - drive calibration: the voltage-board control and calibration reworked from bench testing.
+      - one DRIVE value (V = rail x PWM) commands the motor. Above Minimum Rail x Nominal PWM
+        the PWM holds at Nominal and only the rail moves; below it the rail holds at Minimum
+        Rail and the PWM falls to zero. The slowest speeds are reachable at last (V5.00 could
+        not go below ~4.4 V at 80 % PWM, which was miles too fast on some clusters).
+      - multi-mark calibration replaces the single top point: in Calibration Mode set the drive
+        until the needle sits on a mark, capture it; repeat for a low mark, the top and a few
+        between (up to 10). Each mark stores speed, tacho Hz, drive, rail and PWM. Running
+        interpolates the drive between marks (open loop), and Measured Speed maps tacho Hz back
+        through the same marks, so a dial that isn't linear near zero reads right (V5.00 showed
+        16 km/h with the needle on 20). The V5.00 top point is carried over as the first mark.
+      - the mid-ranging law (fast PWM PID + slow voltage loop) is gone: it fought itself and
+        ignored Feedback Enable. Feedback is now one slow trim on the calibrated drive, only with
+        Feedback Enable on, above Min Feedback Speed and outside the PID Deadband, capped at
+        ±Feedback Trim Limit (default 20 %).
+      - tacho and rail are measured every 100 ms in every mode, and Speed Test's status now
+        carries the rail/drive/Hz fields: the read-outs no longer freeze outside Calibration.
+      - calibration card: drive -/+ buttons and slider sit above every read-out, the hint line
+        has a reserved height and the values can't wrap, so nothing moves the buttons.
+      - Voltage Control settings are now Nominal PWM, Maximum Rail (V), Feedback Trim
+        Gain and Limit; the old 0..1 Min/Max Voltage, Minimum PWM and PWM-loop Kp/Ki/Kd are gone.
+      - Speed Test on the voltage board no longer writes a legacy duty when the speed slider moves,
+        and the needle sweep drives up to the calibrated Max Speed instead of raw PWM at boot rail.
+      - own build folder (speedpulser-v501-pio) so the V5.00 build stays intact.
+      - capture "Steady" now tests DRIFT (newer half-second mean vs older, <= 2 % or 0.75 Hz),
+        not spread: low-speed motor cogging (e.g. 23.1-24.7 Hz) is a wobble around a constant
+        mean and averages out, so it no longer blocks a capture. Spread only has to stay under
+        20 % / 4 Hz, which rejects a stalling or stuttering motor.
+      - running speed is capped at the top calibration mark: no extrapolated drive / trim target
+        past it, so a high Max Speed or input can't overspin the motor.
+      - Minimum Rail is fixed at 3.0 V (the hardware floor; setting removed).
+      - Reverse Direction inverted: unticked (pin LOW) is now the correct way. Stored under a new
+        EEP key, so units that had Reverse ticked to compensate come up unticked = correct.
+      - dashboard graph legend coloured again (the swatch styles were lost in the V4.02 theme),
+        with solid/dashed/dot swatches matching each trace and the axis each is read against.
+      - voltage calibration export/import: Export Voltage Cal saves the marks + Nominal PWM / Max
+        Rail; files are tagged "type": speedpulser-voltage-cal or speedpulser-pwm-cal and the one
+        Import button loads whichever it is. Cal POST bodies are now collected across TCP chunks.
+      - "Cal:" banner reads "Voltage (n marks, lo-hi)" when Voltage Control is driving the motor,
+        and the preset selector notes that the PWM preset is idle.
 
 Notes:
 - Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor

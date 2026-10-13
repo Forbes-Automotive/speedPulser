@@ -55,11 +55,35 @@ uint16_t applyConfiguredSpeedOffset(uint16_t speedKph); // Apply selected offset
 void resetMedianFilter();                 // Reset sample buffer (call when averageFilter changes)
 void resetPid();                          // Reset PID accumulators
 int16_t applyFeedbackTrim(uint16_t targetSpeed, uint16_t baseDuty); // PID duty correction
-bool calibrateFeedbackMaxFreq(uint16_t actualSpeed); // one-point tacho-Hz<->speed calibration
+bool calibrateFeedbackMaxFreq(uint16_t actualSpeed); // legacy one-point tacho-Hz<->speed calibration
 uint32_t speedToPwmDuty(uint16_t speedKph); // speed -> interpolated hardware PWM duty (finer than the cal grid)
-float updateMeasuredFreq();               // measure + publish motor tacho frequency (Hz)
-int16_t applyMidRangingControl(uint16_t targetSpeed); // V4 mid-ranging: PWM tracks RPM, voltage self-schedules
-void resetMidRanging();                   // clear mid-ranging PID + voltage-trim state
+float updateMeasuredFreq();               // measure + publish motor tacho frequency (Hz) — 100 ms cadence
+float speedToTachoHz(float speed);        // tacho Hz expected at a dial speed (drive table, else legacy linear)
+void syncFeedbackMaxFreq();               // re-derive feedbackMaxFreq (Hz at maxSpeed) from the drive table
+// Last ~1 s of tacho: mean, spread ((max-min)/mean, %) and drift (newer half-second
+// mean minus older half-second mean, Hz).
+bool feedbackHzWindow(float &meanHz, float &spreadPct, float &driftHz);
+// "Steady" = the MEAN has stopped moving. Cogging at low speed is a wobble around a
+// constant mean (e.g. 23.1-24.7 Hz, ~7 % p-p) and averages out of each half, so it
+// shows as spread but not drift; a motor still settling after a drive change shows
+// as drift. The spread limit only rejects a motor that is stalling / stuttering.
+#define CAL_MAX_DRIFT_PCT   2.0f          // max |drift| as % of the mean...
+#define CAL_MAX_DRIFT_HZ    0.75f         // ...or in Hz, whichever is looser (low speeds)
+#define CAL_MAX_SPREAD_PCT  20.0f         // max (max-min)/mean...
+#define CAL_MAX_SPREAD_HZ   4.0f          // ...or in Hz, whichever is looser
+inline bool feedbackHzSteady(float meanHz, float spreadPct, float driftHz)
+{
+  const float spreadHz = spreadPct * meanHz / 100.0f;
+  const bool driftOk = fabsf(driftHz) <= CAL_MAX_DRIFT_HZ ||
+                       fabsf(driftHz) * 100.0f / meanHz <= CAL_MAX_DRIFT_PCT;
+  const bool spreadOk = spreadHz <= CAL_MAX_SPREAD_HZ || spreadPct <= CAL_MAX_SPREAD_PCT;
+  return driftOk && spreadOk;
+}
+
+// Voltage board: open-loop drive from the calibration table + optional slow feedback trim
+uint16_t applyDriveControl(uint16_t targetSpeed); // returns the raw PWM duty applied
+void resetDriveControl();                 // drop the feedback trim
+extern float driveTrim;                   // feedback trim on the calibrated drive (fraction, ±vcTrimLimit)
 void speedControlTask(void *parameter);   // FreeRTOS task for speed control
 
 // ===== LEDC PWM Configuration =====
