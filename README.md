@@ -1,6 +1,8 @@
 # SpeedPulser
 
-The SpeedPulser converts digital speed pulses from a gearbox hall sensor (or a [Can2Cluster](https://forbes-automotive.com) signal) into a 10 kHz PWM signal that drives a BLDC motor — giving life back to an OEM analog speedometer without a mechanical cable. It is fully open-source, WiFi-configurable, and calibrated per cluster type so the needle reads accurately across the available speed range of the motor.
+**Get one ready-built:** [SpeedPulser at Forbes Automotive](https://forbes-automotive.com/products/speedpulser?utm_source=github&utm_medium=readme&utm_campaign=speedpulser) · Check your speedo in the [Speedo Fitment Guide](https://forbes-automotive.com/pages/speedo-fitment-guide?utm_source=github&utm_medium=readme&utm_campaign=speedpulser) · Need RPM or GPS too? See the [SpeedPulser Pro](https://forbes-automotive.com/products/speedpulser-pro?utm_source=github&utm_medium=readme&utm_campaign=speedpulser).
+
+The SpeedPulser converts digital speed pulses from a gearbox hall sensor (or a [Can2Cluster](https://forbes-automotive.com/products/can2cluster) signal) into a 10 kHz PWM signal that drives a BLDC motor — giving life back to an OEM analog speedometer without a mechanical cable. It is fully open-source, WiFi-configurable, and calibrated per cluster type so the needle reads accurately across the available speed range of the motor.
 
 It is based on a **LOLIN C3 Mini (ESP32-C3)** and uses a **TY3816B** BLDC motor driven via a native LEDC hardware PWM channel.
 
