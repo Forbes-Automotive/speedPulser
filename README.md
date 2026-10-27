@@ -546,3 +546,4 @@ Platform: `pioarduino/platform-espressif32` (Arduino-ESP32 3.x / ESP-IDF 5.x)
 | V4.02 | OTA overhaul: update from GitHub, Home WiFi bridge mode, recovery page |
 | V5.00 | V5 PCB: motor-rail read-back, Test Board, top-speed calibration by rail voltage |
 | V5.01 | Drive calibration (up to 10 marks, slowest speeds reachable), one slow feedback trim, Reverse Direction corrected (unticked = normal; resets on update), voltage cal export / import, long press on a phone no longer highlights text |
+
