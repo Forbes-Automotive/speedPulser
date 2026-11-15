@@ -1,7 +1,24 @@
 {
   "product": "SpeedPulser",
-  "latest": "5.01",
+  "latest": "5.02",
   "releases": [
+    {
+      "version": "5.02",
+      "channel": "stable",
+      "date": "2026-11-15",
+      "ota": true,
+      "notes": "Start-up log on the Advanced page: records why the module started (power-on, brown-out, crash, watchdog) for the last 10 starts and counts short runs, to diagnose units that misbehave when the car is started (e.g. powered from a feed that drops out while cranking).",
+      "firmware": {
+        "path": "V5.02/firmware.bin",
+        "size": 1272672,
+        "sha256": "242f1e78b29d3a2fca28021c6de8427c7b4a65f229d6dab5cddcfa0407b5e9e5"
+      },
+      "filesystem": {
+        "path": "V5.02/littlefs.bin",
+        "size": 655360,
+        "sha256": "44fd368531c91085d727fcbfa1f56e2d0a668f7ea721d309ba07cb227206a8cc"
+      }
+    },
     {
       "version": "5.01",
       "channel": "stable",
