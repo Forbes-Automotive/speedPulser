@@ -45,7 +45,6 @@
     cfg.repo = info.repo || "";
     cfg.branch = info.branch || "main";
     cfg.releasesDir = (info.releasesDir || "Releases").replace(/^\/+|\/+$/g, "");
-    cfg.product = info.product || "";
     cfg.version = info.version || "";
     installedVersion = cfg.version;
     mirrors = cfg.repo ? [
@@ -88,8 +87,6 @@
       set("otaFwVersion", i.version);
       set("otaFsVersion", i.fsVersion && i.fsVersion !== "--" ? i.fsVersion : (i.version ? i.version + " (assumed)" : "--"));
       set("otaBoard", i.board);
-      set("otaPartition", i.partition);
-      set("otaHardware", i.board);
       set("updInstalled", i.version ? "v" + i.version : "--");
       const repoEl = $("updRepo");
       if (repoEl) repoEl.textContent = cfg.repo ? cfg.repo + " / " + cfg.releasesDir : "no release channel configured";
@@ -504,8 +501,13 @@
         const safe = await fetchJson("/api/ota/check");
         if (!safe || !safe.allowed) throw new Error("Blocked: " + ((safe && safe.reason) || "device not in a safe state for an update."));
 
+        // Both images are downloaded BEFORE anything is flashed (V5.08): losing
+        // the internet half way used to leave the new web UI on the old firmware.
         stage = "dlfs";
         const fsBlob = await download(rel, "filesystem", "dlfs");
+        stage = "dlfw";
+        const fwBlob = await download(rel, "firmware", "dlfw");
+
         stage = "fs";
         await flash(fsBlob, "filesystem", "fs");
 
@@ -517,8 +519,6 @@
         if (fsi.fsVersion && fsi.fsVersion !== "--" && fsi.fsVersion !== rel.version) throw new Error("Web UI reports v" + fsi.fsVersion + ", expected v" + rel.version + ". Retry the update.");
         setStep("verify", "done");
 
-        stage = "dlfw";
-        const fwBlob = await download(rel, "firmware", "dlfw");
         stage = "fw";
         await flash(fwBlob, "firmware", "fw");
 
@@ -552,7 +552,7 @@
       if (!rel || busy) return;
       const dir = cmpVer(rel.version, installedVersion);
       const what = dir < 0 ? "roll back to v" + rel.version : (dir === 0 ? "re-install v" + rel.version : "update to v" + rel.version);
-      let msg = "This will " + what + " (currently v" + installedVersion + ").\n\nThe web UI is replaced first, then the firmware, then the device reboots. Keep this page open.";
+      let msg = "This will " + what + " (currently v" + installedVersion + ").\n\nBoth files are downloaded first, then the web UI and the firmware are replaced and the device reboots. Keep this page open.";
       if (dir < 0) msg += "\n\nRolling back: older releases may not have this update page, so coming forward again could mean a USB flash. Settings may also be reset.";
       if (!confirm(msg + "\n\nContinue?")) return;
       runInstall(rel);

@@ -8,7 +8,7 @@
 //
 // Lets a user build their own speedometer calibration by capturing a handful
 // of "speed" points — each a (speed, duty) pair measured live on the gauge —
-// and expanding them into the full 385-entry motorPerformance[] table used by
+// and expanding them into the full 385-entry presetSpeedTable[] used by
 // the runtime.  Speed points are stored in EEP and the table is rebuilt
 // on boot, so a custom calibration survives power cycles.
 //
@@ -18,7 +18,7 @@
 // preset function and can be exported as a ready-to-share preset array.
 // ---------------------------------------------------------------------------
 
-#define CUSTOM_CAL_ID     200   // motorPerformanceVal value that selects the custom cal
+#define CUSTOM_CAL_ID     200   // presetId value that selects the custom cal
 #define MAX_CAL_POINTS     32   // hard cap on captured anchors (~128 bytes NVS)
 #define CAL_NAME_MAX       40   // max chars for the calibration name
 
@@ -39,13 +39,13 @@ void calBuilderInit();          // load speed points from EEP, rebuild table (ca
 void calSaveToNvs();            // save current points + name to EEP
 
 // Speed Point Editing (each rebuilds the table on success)
-bool calAddPoint(uint16_t speed, uint16_t duty);  // insert/replace, kept sorted by duty
+bool calAddPoint(uint16_t speed, uint16_t duty, const char *&err); // insert/replace, sorted by speed; refuses out-of-order duty
 bool calDeletePoint(uint8_t index);
 void calClearPoints();
 void calSetName(const char *name);
 
 // Table Generation
-void buildCustomCalTable();     // fill motorPerformance[] from the current anchors
+void buildCustomCalTable();     // fill presetSpeedTable[] from the current anchors
 
 // Runtime lookup — interpolate a requested speed straight to a full-resolution
 // 12-bit duty from the speed points, bypassing the 385-entry / 10-bit table
@@ -58,6 +58,6 @@ uint32_t customSpeedToDuty12(uint16_t speed);
 #define PWM_CAL_FILE_TYPE "speedpulser-pwm-cal"
 void calExportJson(String &out);    // shareable round-trippable JSON
 void calExportCArray(String &out);  // drop-in motorPerformanceN[] C source block
-bool calImportJson(const char *json);  // parse anchors from exported JSON
+bool calImportJson(const char *json, const char *&err); // whole file checked first; false + err leaves the cal alone
 
 #endif  // SPEED_PULSER_CAL_BUILDER_H

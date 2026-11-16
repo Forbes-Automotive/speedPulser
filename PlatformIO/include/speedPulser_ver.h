@@ -1,7 +1,7 @@
 #ifndef SPEED_PULSER_VER_H
 #define SPEED_PULSER_VER_H
 
-#define FW_VERSION "5.01" // V5 PCB: drive calibration (multi-mark), open-loop drive + gentle feedback trim
+#define FW_VERSION "5.09" // shared web UI with Pro, small audit fixes, tuning constants in defs.h
 #define VERSION FW_VERSION  // legacy name used throughout this project
 
 /*
@@ -164,6 +164,206 @@ V5.01 - drive calibration: the voltage-board control and calibration reworked fr
       - "Cal:" banner reads "Voltage (n marks, lo-hi)" when Voltage Control is driving the motor,
         and the preset selector notes that the PWM preset is idle.
 
+V5.02 - start-up log, to diagnose units that misbehave when the car is started (needle pegged /
+        no WiFi after cranking): every boot records WHY the ESP32 started (power-on, brown-out,
+        power glitch, crash, watchdog, software restart, USB/reset pin) in its own NVS namespace
+        ("resetLog"), with a count per cause and the last 10 starts.
+      - a start that never reaches 10 s of running is counted as a "Short Run": several in a row
+        mean the supply is dropping out or bouncing during cranking (e.g. wired to terminal 75 /
+        X-contact instead of 15).
+      - Advanced page "Start-up Log" card (this start's cause, counts, history, Refresh / Clear Log);
+        GET /api/resetlog, POST /api/action {"action":"clearResetLog"}.
+      - two small NVS writes per boot only. A chip that hangs in the boot ROM can't be logged; it
+        shows as a Power-on at the next switch-on.
+
+V5.03 - calibration drive can no longer be dragged: the Drive slider on the Calibration card is now
+        display-only (shows the drive, can't be touched) and the -/+ buttons are the only way to change
+        it. A stray tap on the slider jumped the motor voltage and nearly over-drove a speedo.
+      - firmware guard: one tempDriveV request may raise the calibration drive by at most 0.5 V (the
+        largest button step); lowering is unrestricted. Covers a cached old page or a second browser.
+
+V5.04 - bench session on a TY3816B fitted to a cluster (2026-11-15, tools/bench_tacho.py + env:bench):
+      - tacho measured from pulse TIMING: the ISR keeps the last 32 edge times and the reading
+        averages whole revolutions (5 pulses per turn: the pole spacing isn't even and a whole
+        turn cancels it) over >= 200 ms. V5.03 counted pulses per 100 ms window and needed two,
+        so below ~20 Hz windows read 0 while the motor was still turning (20 -> 0 -> 20; at 8.5 Hz
+        every window read 0). Holds steady down to the motor's floor (~6 Hz); between pulses it
+        holds but reads down once a pulse is overdue (no faster than 1.5 / time since the last
+        pulse); 0 after 0.6 s. Edges < 1 ms apart are dropped (line noise pairs seen on the bench).
+      - Minimum Rail is a setting again (Advanced > Voltage Control), default 4.8 V. The motor's
+        driver needs ~4.75 V+: from 3.1 to 4.6 V low speeds jump, stall and won't restart; at 4.8 V
+        the PWM alone runs it 2 % (8 Hz) to 78 % (140 Hz) near-linearly and it started from rest
+        47/47 times down to 1.7 %. A unit updated with a calibration keeps 3.0 V (its marks were
+        captured with the rail on the floor; at 4.8 V the same drive runs about twice as fast)
+        until the marks are recaptured. Cal files carry railMinV; older files import as 3.0 V.
+      - motor off idles the rail at the 3.0 V floor (not at Minimum Rail).
+      - feedback trim compares the tacho with a reference model (the target followed with the
+        motor's own lag: 63 % in ~0.35 s) and only integrates once the model has reached the
+        target. Integrating the raw step error wound the trim up mid-acceleration: 5-31 Hz
+        overshoot on a speed-up, and a big slow-down dipped the needle to ~0 for ~7 s.
+      - the trimmed drive is capped at the top mark's drive + 5 % (no overspin past the dial).
+      - bench-tuned feedback defaults on voltage boards (new units / Reset PID Defaults):
+        Feedback Enable ON, Trim Gain 2.0, Trim Limit +/-40 %, Deadband 0.3 Hz, Min Feedback
+        Speed 8. Held 10-160 km/h within ~1 % of the captured tacho speed, recovered a sudden
+        27 % slow-down at 20 km/h in ~1.5 s. Legacy boards keep the PID-path defaults.
+      - env:bench (not for release): serial bench interface for tools/bench_tacho.py, rail hard-
+        capped at 4.8 V, trip at 5.0 V read-back, firmware overspeed trip, Board Test and the
+        boot needle sweep disabled. tools/flash.sh flashes with esptool directly.
+
+V5.05 - Drive Calibration Auto Fill (speedPulser_autoFill.cpp). A calibration is two curves: the
+        dial (tacho Hz -> needle), which only a person can see but is a straight line (bench: 10
+        eye marks 40-193 km/h within 0.9 km/h of one line; 40 + 140 alone predict the rest within
+        1.4 km/h), and the motor (drive -> Hz), which the tacho measures. The user captures the
+        top mark by eye (optionally a low one too); Auto Fill keeps every eye mark's speed + Hz,
+        adds auto marks at 10/20/30/40 then every 10 to the top (wider if the table runs out; none
+        below 7 Hz) on the line through the eye marks, and for each mark, lowest first, finds the
+        drive that holds its Hz (secant steps, settle 1.2-1.6 s, average 1-2 s, within
+        max(0.15 Hz, 0.5 %)). Never faster than the top mark (raw tacho > topHz x 1.06 + 1 Hz
+        stops it), drive <= 1.25 x the top mark's capture drive and the Max Rail limit, steps up
+        <= 25 %. Fails safe: motor off, table untouched. Runs in Calibration Mode; turning that
+        off, Speed Test or Stop ends it.
+      - marks carry their source: eye (captured) or auto (Auto Fill), in what was struct padding
+        (NVS "dcSrcV" marks the new layout; older tables read as all eye). Cal files carry "src".
+        Capturing an eye mark drops the auto marks at that speed or out of order with it, and
+        makes room by dropping the nearest auto mark when the table is full.
+      - up to 20 marks (was 10).
+      - one backup table in NVS ("dcBak", an export file incl. drive settings), saved just
+        before Auto Fill replaces the table. Restore Previous swaps the two.
+      - API: actions calAutoFill / calAutoFillStop / calRestore; status "autoFill" {state, index,
+        total, speed, hz, msg} and "calBackup". Bench: af 1|0, afst, calsrc, calrestore.
+
+V5.06 - audit pass (2026-11-16).
+      Safety:
+      - an uncalibrated voltage board no longer drives the motor outside Calibration Mode. The old
+        guess ran a straight line up to Max Rail x Nominal PWM (9.6 V with the defaults) at Max
+        Speed, so the first Speed Test on a new board pegged the speedo.
+      - needle sweep: refused unless the car is stopped and no test is running (it holds the control
+        task for seconds); Sweep Speed is at least 1 (0 jumped the needle to the top in one step);
+        on a voltage board it sweeps to the top calibration mark (no marks = no sweep). The legacy
+        board still sweeps to full PWM (to be reviewed).
+      - Calibration Builder refuses a point whose duty doesn't rise with speed, and interpolates in
+        signed maths: a falling pair used to wrap to a duty in the millions. Imports are checked as
+        a whole first.
+      - every /api/control value is range-checked (a bad PID gain, Max Hall 0, Min Rail above Max
+        Rail could each over-drive or kill the needle); the reply carries the value kept.
+      - drive marks can only be changed, cleared, restored or imported in Calibration Mode, and the
+        direction only with the motor stopped (no needle jumps while driving).
+      - Speed Test is never saved or loaded (a badly timed save could boot a unit into Speed Test
+        at 100 km/h), and settings ARE saved while Speed Test runs (they were lost before).
+      - calibration tables are saved table first, count second, and the count is taken from the
+        table's size: a power cut between the two writes used to lose every mark.
+      - web POSTs must be application/json (a page on another site can't drive the motor) and are
+        collected across TCP chunks. OTA only with the car stopped and no test running; the motor
+        stops when an upload starts; a firmware upload whose phone disconnects is aborted; a web UI
+        upload cut off by power loss is caught at the next boot (recovery page).
+      Speed input (speedPulser_control.cpp):
+      - the sensor is ONE setting, pulses per km (VW / Audi 3600 = 1 Hz per km/h; 4000 / 8000 /
+        16000 pulses-per-mile presets). Max Speed is only the needle limit now. Old units carry their
+        Max Hall Frequency / Max Speed ratio over.
+      - glitch filter = half a period at Max Speed (200 us - 3 ms) instead of a fixed 3 ms, so
+        sensors over 333 Hz no longer read half speed.
+      - the speed is timed pulse by pulse and averaged over the Smoothing time (default 200 ms) on a
+        100 ms tick, in floating point. The old 1 ms "window" held one pulse, then a block median of
+        N pulses updated the needle in steps (0.6 s steps at 10 km/h). RunningMedian is gone.
+      - offset curve interpolated between 25 / 75 / 125 / 175 / 225 km/h (it stepped at the band
+        edges); the global offset is one signed value; offsets only apply while moving.
+      - km/h -> mph rounds instead of truncating (the needle read ~0.5 mph low on average).
+      Removed (not used by any board in the field):
+      - "Voltage Control off" (fixed 9 V rail + presets on a voltage board).
+      - the legacy PID (Kp/Ki/Kd, feedbackMaxFreq, Capture Top Speed): legacy boards have no
+        motor feedback wired. Voltage-board feedback is unchanged.
+      - dead code: 23 no-op Preferences.begin() calls (every setting is in the namespace
+        "hasNeedleSweep", kept), the never-run first-boot block, unused debug macros, speedMultiplier,
+        updateMotorPerformance, calPrevious / calNext, the diag task; the control task is one
+        100 ms tick (was a 1 ms loop).
+      Web UI: rebuilt around the setup order. Dashboard / Setup (1 Board, 2 Cluster & Speed Sensor,
+        3 Calibrate, 4 Speed Test, 5 Offset, 6 Needle Sweep) / Advanced / Diagnostics / Update.
+        One control per setting, board-specific cards only on their board, one API helper that shows
+        the unit's errors and puts refused values back, status polled every 250 ms (paused when the
+        tab is hidden), the reload no longer re-sends the preset, MPH change confirmed when marks
+        exist, units shown correctly with an mph dial, stylesheet trimmed to what the UI uses.
+      Names: dutyCycle -> inputSpeedKph, dutyCycleIncoming -> inputFrequencyHz, requestedSpeed ->
+        needleTargetSpeed, testSpeedo / tempSpeed -> speedTestOn / speedTestKph, testCal ->
+        calibrationModeOn, motorPerformanceVal -> presetId, vc* -> pwmNominal / railMinV / ... (NVS
+        keys unchanged, so every saved setting loads).
+
+V5.07 - even needle sweep (2026-11-16).
+      - the sweep ramps the dial SPEED evenly and looks up the drive / duty for it through the
+        calibration every 10 ms. It used to ramp the drive (voltage board) or the raw duty (legacy)
+        evenly; the motor's speed isn't a straight line against either, so the needle leapt off the
+        stop, slowed in the middle and rushed at the end.
+      - it runs from the lowest to the highest calibrated speed at Sweep pace (ms per dial km/h or
+        mph), slows to a stop over the last 20 % of the climb, then waits at the top: with a tacho
+        until the motor is within 3 % of the top mark (at most 1.5 s), without one 0.4 s. The way
+        down is the climb backwards; at the lowest speed the motor is cut and coasts home.
+      - legacy board: now sweeps to the top of the selected preset / custom table, not to full PWM
+        against the stop. No calibration = no sweep, on either board.
+      - the rail over-voltage check and the tacho keep running during the sweep.
+      - driveForSpeed() takes a fractional speed; sweep constants in speedPulser_defs.h.
+
+V5.08 - second audit pass (2026-11-16).
+      Calibration:
+      - legacy: Calibration Builder edits and Export no longer overwrite the running preset table
+        (the needle could go dead, or run the custom curve under the preset's name, until a
+        reboot). A selected custom cal with < 2 points falls back to preset 1.
+      - legacy: Save & Use (was Generate & Apply + Save to Device) always saves the points;
+        picking Custom saves them too. Apply alone used to lose them at the next ignition-on.
+      - legacy: Builder point changes need Calibration Mode; mph can't be switched away from the
+        unit a selected custom cal was captured in.
+      - Auto Fill clears the auto marks at the start and adds each mark as it is measured (the
+        table builds up on screen); a stopped or failed run puts the old table back. Stop is
+        handled in the control task (a stop could be undone by the running tick). It refuses to
+        start with the car moving.
+      - a mark's eye / auto pill can be tapped to switch it (pre-V5.05 tables load all "eye").
+      - Minimum Rail / Nominal PWM / Maximum Rail change in Calibration Mode only. Maximum Rail
+        default 8 V for a new unit (was 12 V); up to 12 V allowed.
+      Safety:
+      - Speed Test and Calibration Mode end when WiFi goes to sleep (nothing could stop them).
+      - feedback: a tacho that goes silent for 1.5 s drops the trim (open loop) and the page says
+        so; readings far from the model are never integrated (a broken wire wound it to +40 %).
+      - rail over-voltage trip in every build: 2 V over the command for 0.5 s (command steady
+        3 s) turns the motor and buck off until a restart.
+      - Speed Test is capped at Maximum speed.
+      - OTA / Home WiFi POSTs from another site's page are refused (Origin check); a web UI
+        upload is checked once at the start (a speed blip mid-upload wiped the UI).
+      - the home WiFi retry no longer switches the radio back on in low-power mode.
+      Web UI:
+      - tests are orange: badge, a Dashboard banner with Stop, an orange line under the header.
+      - an emptied number box puts its value back (it sent 0: 100 pulses/km pinned the needle);
+        a refused or clamped value shows in the box being edited; "Offline" after ~1 s with no
+        answer, and the page keeps retrying the first load.
+      - phone sliders only move on a sideways drag (a tap or a scroll no longer changes them).
+      - Calibration Mode controls greyed out until it's ticked; dashboard tiles centred; tabs on
+        one line on a phone (Adv. / Diag. / OTA); mph tick next to Reverse; helper text cut down.
+      - guided OTA downloads both files before flashing anything; preset names shown as text.
+
+V5.09 - shared web UI + small audit fixes (2026-11-16).
+      Shared (both projects):
+      - one app.js for SpeedPulser and SpeedPulser Pro: the web API uses the same names in both
+        (Pro renamed e.g. testCal -> calibrationModeOn, tempSpeed -> speedTestKph, vcRailMaxV ->
+        railMaxV, convertToMPH -> clusterInMph; saved settings are untouched). /api/control replies
+        {"status":"ok","value":...} on both; an unknown setting or action is refused.
+      - tuning constants (Auto Fill, tacho, feedback trim, input glitch limits) moved out of the
+        .cpp files into one Tuning section of the main header.
+      - micros() wrap: a parked unit forgets old pulses (a twitch every 71.6 min); slow sensors get a
+        longer stop timeout (up to 5 s) instead of flickering to 0.
+      - imported and stored drive tables are range-checked (drive <= 12 V, Hz, rail, PWM, order);
+        tables save their count first, so a power cut can't leave 0 marks over a new table; the
+        settings save takes a consistent copy of the table (it could catch one mid-change).
+      - Test Board never steps past Maximum rail, and needs Maximum rail >= 6 V.
+      - the Calibration Builder is refused on a voltage board; a PWM file can't be imported there.
+      - a POST with no body is answered (it hung); mark speeds are checked before they wrap.
+      - the board-ID pull-up is turned off after reading (~72 uA); preset tables are const
+        (14 KB of RAM back); retired NVS keys removed once replaced; library versions pinned;
+        unused code and status values removed.
+      - page: "Motor speed" dial only on boards with a tacho; Test Board shows "No answer" if the
+        unit stops answering mid-test.
+      - feedback anti-windup: the trim stops growing when the drive hits its cap (1.05 x the top
+        mark, or Max Rail x 100 %); it used to wind up to the +40 % limit against the cap. The page
+        says when the trim sits at its limit (the calibration doesn't match the motor there).
+      - phone: a touch outside the box being typed in releases it (each slider move scrolled the
+        page back to the last box typed in); the Auto Fill prompt lists the eye marks it keeps.
+
 Notes:
 - Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor
 - Converts to PWM signal for a BLDC motor
@@ -172,6 +372,7 @@ Notes:
 - Allows <10mph readings while supporting high (160mph) readings
 - Default support for 12v hall sensors from 02J / 02M etc: 1Hz = 1km/h
 - Uses 'RunningMedian' for capturing multiple input pulses
+      - page: the motor's FG signal is called "Motor feedback" (Diagnostics tile, feedback-lost warning), not "tacho".
 */
 
 #endif  // SPEED_PULSER_VER_H

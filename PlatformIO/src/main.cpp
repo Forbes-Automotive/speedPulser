@@ -7,6 +7,7 @@
 #include "speedPulser_voltage.h"
 #include "power_manager.h"
 #include "wifi_manager.h"
+#include "speedPulser_resetLog.h"
 
 /*
 SpeedPulser - Forbes Automotive '26
@@ -17,12 +18,11 @@ Tested on VW, Ford, Fiat, Mercedes & Jaguar clusters.
 Inputs are a 5v/12v square wave input from Can2Cluster or an OEM Hall Sensor and
 converts it into a PWM signal for a BLDC motor using FreeRTOS multitasking.
 
-Refactored to use:
-- Native LEDC hardware PWM (driver/ledc.h) instead of ESP32_FastPWM
-- FreeRTOS tasks for speed control (real-time), EEPROM, and WiFi management
-- RunningMedian for capturing and filtering input pulses
-- AsyncWebServer with API instead of ESPUI
-- Global speed offset changed to curve with linear interpolation
+Built on:
+- native LEDC hardware PWM (driver/ledc.h)
+- FreeRTOS tasks: the 100 ms control task, the settings save task, power management
+- the speed sensor timed pulse by pulse and averaged (speedPulser_control.cpp)
+- AsyncWebServer + a JSON API for the web UI
 */
 
 void setup()
@@ -35,7 +35,7 @@ void setup()
     // Sample the board-version strap (GPIO3) before anything else uses the pin.
     detectBoardVersion();
 
-#if enableDebug
+#if enableDebug || defined(BENCH_SERIAL)
     Serial.begin(baudSerial);
     Serial.setTxTimeoutMs(10); // non-blocking TX: don't stall if no USB host is connected
     // Wait for the native USB-CDC to start
@@ -51,34 +51,32 @@ void setup()
     DEBUG("====================================================");
 #endif
 
+    // Log WHY this start happened (power-on / brown-out / crash / watchdog...) before
+    // anything else can fail, so a supply that drops out while cranking shows up in the app.
+    resetLogInit();
+
     readEEP();          // Load saved settings from EEPROM
     calBuilderInit();   // Load any user (SpeedPulserV2) custom calibration 
     updateMotorArray(); // Update motor calibration array from EEPROM
 
     basicInit();     // Initialize GPIO, LEDC PWM, interrupts
-    setMotorDuty(0); // Motor off initially
+    setMotorDutyRaw(0); // motor off
 
-    // Voltage board only: bring up the adjustable motor supply. The buck must be
-    // enabled for the motor to have any voltage, so enable it regardless of the
-    // control mode — starting at the minimum (safe) rail with the motor PWM already off.
+    // Voltage board only: bring up the adjustable motor supply, starting at the
+    // minimum (safe) rail with the motor PWM already off.
     initVoltageControl();
     if (boardHasVoltageControl)
-    {
         enableBuck();
-        if (!voltageControlEnable)
-        {
-            // Legacy PWM behaviour: hold the fixed ~9 V the duty presets were captured on.
-            setMotorRailVolts(RAIL_V_LEGACY);
-        }
-    }
 
     connectWifi();    // Enable WiFi and start AP/Station
     setupWebServer(); // Setup API web server and serve web files
 
-    if (hasNeedleSweep)
+#ifndef BENCH_SERIAL
+    if (needleSweepOnBoot)
     {
         needleSweep(); // Run needle sweep if enabled
     }
+#endif
 
     // Universal reduced-power module (power_manager): 
     // turns WiFi off 1 min after the last client
@@ -90,10 +88,13 @@ void setup()
     powerInit(&pcfg);
 
     taskInit(); // start FreeRTOS tasks for speed control, EEPROM management
+#ifdef BENCH_SERIAL
+    benchInit(); // serial bench interface (bench build only)
+#endif
 
-    DEBUG("setup complete — cal=%u maxSpeed=%u kph units=%s feedback=%s. Running.",
-          (unsigned)motorPerformanceVal, (unsigned)maxSpeed,
-          convertToMPH ? "mph" : "kph", feedbackEnable ? "ON" : "OFF");
+    DEBUG("setup complete — %s board, maxSpeed=%u km/h, %.0f pulses/km, dial in %s. Running.",
+          boardHasVoltageControl ? "voltage" : "legacy", (unsigned)maxSpeed, sensorPulsesPerKm,
+          clusterInMph ? "mph" : "km/h");
 }
 
 void loop()
@@ -101,5 +102,6 @@ void loop()
     // all work is done in tasks - this is just a placeholder
     // to keep the Arduino framework happy
     vTaskDelay(pdMS_TO_TICKS(1000));
+    resetLogTick();    // marks this start "ran OK" once it has run 10 s
     wifiManagerTick(); // Home WiFi (bridge mode): connection tracking + retry back-off
 }

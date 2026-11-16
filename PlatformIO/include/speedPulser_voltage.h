@@ -39,8 +39,12 @@
 #define RAIL_V_FLOOR       3.0f     // ~100 % V_ADJ duty: lowest rail the injection can reach
 #define RAIL_V_CEIL       12.0f     // firmware ceiling: motor rating, C21 16 V cap, and the
                                     // ADC read-back saturates at ~12.2 V (2.5 V at the pin)
-#define RAIL_V_LEGACY      9.0f     // rail held when voltage control is OFF: the legacy duty
-                                    // presets were captured on the old fixed ~9 V supply
+#define RAIL_OV_MARGIN_V   2.0f     // over-voltage: the rail this far above its command...
+#define RAIL_OV_TICKS      5        // ...for this many 100 ms reads (0.5 s)...
+#define RAIL_OV_SETTLE_MS  3000     // ...with the command steady this long (a lowered rail falls slowly)
+#define RAIL_V_MAX_DEFAULT 8.0f    // V5.08 Maximum Rail default (new units): room for 240-300 km/h dials, raise to 12 V if needed
+#define RAIL_V_MIN_DEFAULT 4.8f    // V5.04 Minimum Rail default: the TY3816B's driver needs ~4.75 V+
+                                    // to run smoothly at low speed (bench, 2026-11-15)
 
 // ===== Rail read-back divider (V_MOT_SENSE) =====
 #define RAIL_SENSE_R_TOP_K 39.0f    // R24 (kΩ) rail -> GPIO1
@@ -49,21 +53,25 @@
 // Board detection + live state
 extern bool  boardHasVoltageControl; // true = voltage board (GPIO3 low); false = legacy PWM-only board
 extern bool  buckEnabled;            // true once the buck supply has been enabled
-extern float lastVoltageCmd;         // last commanded rail as 0..1 of RAIL_V_FLOOR..RAIL_V_CEIL (charts)
 extern float lastRailCmdV;           // last commanded motor rail (V)
 extern float lastPwmFrac;            // last motor PWM fraction applied by the drive (0..1)
 extern float lastDriveV;             // last drive applied (V = rail x PWM)
 extern float motorRailV;             // measured motor rail (V), smoothed (V_MOT_SENSE)
+extern float motorRailRawV;          // last unsmoothed rail read (V)
+extern volatile bool railTripped;    // rail read too high: motor + buck off until a reboot (latched)
+extern float railTripV;              // the rail reading that tripped it
+extern volatile bool benchActive;    // bench build: serial bench mode owns the motor/rail (control task yields)
 
-// User configuration (persisted in EEP)
-extern bool  voltageControlEnable;   // master toggle; when off the board holds RAIL_V_LEGACY and runs legacy PWM
-extern float vcPwmNominal;           // PWM fraction held while the rail does the work
-extern float vcRailMaxV;             // highest rail used (V); the drive tops out at this x 100 % PWM
-extern float vcTrimGain;             // feedback trim: relative drive change per second per unit relative Hz error
-extern float vcTrimLimit;            // feedback trim authority (fraction of the calibrated drive, e.g. 0.2 = ±20 %)
+// User configuration (persisted). A voltage board always runs on the drive
+// calibration (V5.06: the "Voltage Control off" fixed-rail mode is gone).
+extern float pwmNominal;             // PWM fraction held while the rail does the work
+extern float railMaxV;               // highest rail used (V); the drive tops out at this x 100 % PWM
+extern float railMinV;               // rail held at the low end (V) while the PWM falls to zero
+extern float trimGain;               // feedback trim: relative drive change per second per unit relative Hz error
+extern float trimLimit;              // feedback trim authority (fraction of the calibrated drive, e.g. 0.4 = ±40 %)
 
-// Calibration: drive applied in calibration mode (V)
-extern float tempDriveV;
+// Calibration Mode: the drive the user (or Auto Fill) set (V)
+extern float calibrationDriveV;
 
 // ===== Board test (Test Board button) =====
 enum BoardTestCode : uint8_t {
@@ -75,6 +83,9 @@ enum BoardTestCode : uint8_t {
     BT_OUT_OF_RANGE = 5,  // follows V_ADJ but far from the expected voltages (check R6/R11/R8/R9/R23)
 };
 #define BOARD_TEST_POINTS 3
+#define BOARD_TEST_BOTTOM_V 5.0f   // Test Board steps: from here...
+#define BOARD_TEST_TOP_V 10.0f     // ...up to this, or Maximum rail if that is lower...
+#define BOARD_TEST_MIN_TOP_V 6.0f  // ...which must be at least this
 extern volatile bool boardTestActive;   // true while the test owns the motor/rail (control task yields)
 extern uint8_t boardTestCode;           // BoardTestCode of the last run (persisted)
 extern float   boardTestTargetV[BOARD_TEST_POINTS]; // model target for each step (V)
@@ -94,6 +105,8 @@ void disableBuck();                   // drive EN low (supply off)
 float readMotorRailVolts();           // one averaged ADC read of the rail (V); 0 on a legacy board
 void  updateMotorRail();              // smoothed read into motorRailV — call on a ~100 ms cadence
 bool  railLimited();                  // rail sitting well below its command (supply too low / overload)
+
+void  benchInit();                    // bench build: start the serial bench task (speedPulser_bench.cpp)
 
 bool  startBoardTest();               // kick off the Test Board task; false if already running
 const char *boardTestText(uint8_t code);

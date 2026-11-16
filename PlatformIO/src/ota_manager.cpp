@@ -29,6 +29,7 @@
 #include <esp_chip_info.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <Preferences.h>
 
 // ---- Module state -----------------------------------------------------------
 static ota_config_t g_cfg;
@@ -151,6 +152,34 @@ static bool fsSuperblockLooksValid(const esp_partition_t *p)
 
 bool otaFsMounted(void) { return g_fsMounted; }
 
+// "A filesystem upload is in progress", kept in NVS. The update library writes the
+// new image's first block (with its superblock) before the rest, so a power cut
+// mid-upload leaves a valid-looking header on top of the old image's tail, which
+// the superblock check above would pass. Set at the start, cleared once the upload
+// ends either way; found set at boot = the upload was cut off, so the partition is
+// erased and the recovery page is served.
+static void fsUploadFlag(bool busy)
+{
+  Preferences p;
+  if (!p.begin("otaState", false))
+    return;
+  if (busy)
+    p.putBool("fsBusy", true);
+  else if (p.isKey("fsBusy"))
+    p.remove("fsBusy");
+  p.end();
+}
+
+static bool fsUploadWasCutOff(void)
+{
+  Preferences p;
+  if (!p.begin("otaState", true))
+    return false;
+  const bool busy = p.getBool("fsBusy", false);
+  p.end();
+  return busy;
+}
+
 bool otaFsMountSafe(void)
 {
   if (g_fsMounted)
@@ -159,6 +188,13 @@ bool otaFsMountSafe(void)
   if (!p)
   {
     otaLog("FS: no data/spiffs partition in the table");
+    return false;
+  }
+  if (fsUploadWasCutOff())
+  {
+    otaLog("FS: a web UI upload was cut off (power lost?) - erasing it, serving the recovery page");
+    otaFsInvalidate();
+    fsUploadFlag(false);
     return false;
   }
   if (!fsSuperblockLooksValid(p))
@@ -298,6 +334,21 @@ static void fwAbort(void)
   g_inProgress = false;
 }
 
+// A browser always sends Origin on a cross-site POST. The JSON-only rule protects
+// the project's own POSTs, but these uploads and forms are "simple" requests a page
+// on another site could send (V5.08): refuse any whose Origin isn't this unit. No
+// Origin = not a cross-site browser request (curl, an older page's same-origin XHR).
+static bool sameOriginRequest(AsyncWebServerRequest *request)
+{
+  if (!request->hasHeader("Origin"))
+    return true;
+  String origin = request->header("Origin");
+  const int scheme = origin.indexOf("://");
+  if (scheme >= 0)
+    origin = origin.substring(scheme + 3);
+  return origin.equalsIgnoreCase(request->header("Host"));
+}
+
 static void handleFirmwareUpload(AsyncWebServerRequest *request, const String &filename, size_t index,
                                  uint8_t *data, size_t len, bool final)
 {
@@ -309,6 +360,11 @@ static void handleFirmwareUpload(AsyncWebServerRequest *request, const String &f
   }
   if (fwResult.set)
     return; // outcome already decided - drain the rest of the body
+  if (index == 0 && !sameOriginRequest(request))
+  {
+    otaSetResult(fwResult, 403, "OTA BLOCKED: the upload didn't come from this unit's page");
+    return;
+  }
 
   String reason;
   if (!otaIsSafe(reason))
@@ -331,6 +387,11 @@ static void handleFirmwareUpload(AsyncWebServerRequest *request, const String &f
     }
     fwStarted = true;
     g_inProgress = true;
+    // Phone locked / wandered off mid-upload: abort, or the "update in progress"
+    // flag would stay set until a reboot (and WiFi would never power down).
+    request->onDisconnect([]()
+                          {
+      if (fwStarted) { otaLog("client disconnected mid-upload - firmware update aborted"); fwAbort(); otaOnEnd(false, false); } });
   }
 
   fwBytes += len;
@@ -385,6 +446,7 @@ static size_t fsHeadRxLen = 0;
 static void fsUpdateFail(int code, const String &msg, bool wipe = true)
 {
   Update.abort();
+  fsUploadFlag(false);
   if (wipe)
     otaFsInvalidate();
   else
@@ -406,13 +468,18 @@ static void handleFilesystemUpload(AsyncWebServerRequest *request, const String 
   if (fsResult.set)
     return; // outcome already decided - drain the rest of the body
 
+  // Checked once, before anything is written (V5.08). Refusing mid-upload wiped the
+  // partition, so a speed blip (GPS noise) during an upload left the unit with no
+  // web UI; the motor is already stopped by otaOnStart().
   String reason;
-  if (!otaIsSafe(reason))
+  if (index == 0 && !sameOriginRequest(request))
   {
-    if (index == 0)
-      otaSetResult(fsResult, 403, "OTA BLOCKED: " + reason); // nothing written
-    else
-      fsUpdateFail(403, "OTA BLOCKED: " + reason + " (mid-upload) - re-upload the filesystem");
+    otaSetResult(fsResult, 403, "OTA BLOCKED: the upload didn't come from this unit's page");
+    return;
+  }
+  if (index == 0 && !otaIsSafe(reason))
+  {
+    otaSetResult(fsResult, 403, "OTA BLOCKED: " + reason); // nothing written
     return;
   }
 
@@ -424,6 +491,7 @@ static void handleFilesystemUpload(AsyncWebServerRequest *request, const String 
     otaLog("Starting filesystem update: %s (%u bytes expected)", filename.c_str(), (unsigned)expectedSize(request));
     otaOnStart(true);
     fsUnmount(); // nothing may read the partition while it is being rewritten
+    fsUploadFlag(true);
     if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS))
     {
       fsUpdateFail(500, "OTA ERROR: failed to begin filesystem update (no spiffs partition?)", false);
@@ -463,6 +531,7 @@ static void handleFilesystemUpload(AsyncWebServerRequest *request, const String 
       fsUpdateFail(500, "OTA ERROR: filesystem update failed (" + String(Update.errorString()) + ")");
       return;
     }
+    fsUploadFlag(false); // all of it is in flash
     // Mount what was written. If it doesn't come up as a filesystem holding
     // the web UI there's no point keeping it.
     if (!otaFsMountSafe() || !otaFsUiAvailable())

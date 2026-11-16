@@ -3,6 +3,9 @@
 #include "power_manager.h"
 #include "wifi_manager.h"
 #include "ota_manager.h"
+#include "speedPulser_control.h"
+#include "speedPulser_voltage.h"
+#include "speedPulser_driveCal.h"
 
 /**
  * Connect to WiFi in Access Point mode
@@ -31,22 +34,33 @@ void connectWifi()
   DEBUG_WIFI("soft-AP up — SSID=%s  IP=192.168.1.1", wifiHostName);
 }
 
-/**
- * Disconnect WiFi if no devices connected
- * Called periodically by wifiTask
- * NOTE: kept for reference — WiFi management is now handled by power_manager.
- */
-void disconnectWifi()
+// ----------------------------------------------------------------------------
+// ota_manager hooks: an update restarts the unit, so only with the car stopped.
+// ----------------------------------------------------------------------------
+bool otaIsSafe(String &reason)
 {
-  DEBUG_WIFI("clients connected: %d", WiFi.softAPgetStationNum());
-
-  if (WiFi.softAPgetStationNum() == 0)
+  if (!motorIsStopped())
   {
-    DEBUG_WIFI("no clients — turning WiFi off");
-
-    WiFi.disconnect(true, false);
-    WiFi.mode(WIFI_OFF);
+    reason = "Stop the car first: the speedo is running";
+    return false;
   }
+  if (calibrationModeOn || speedTestOn || boardTestActive || autoFillRunning() || needleSweepRequested)
+  {
+    reason = "Turn off Speed Test / Calibration Mode first";
+    return false;
+  }
+  return true;
+}
+
+void otaOnStart(bool filesystem)
+{
+  (void)filesystem;
+  // Belt and braces: nothing may drive the motor while the flash is rewritten.
+  speedTestOn = false;
+  calibrationModeOn = false;
+  setMotorDutyRaw(0);
+  if (boardHasVoltageControl)
+    applyMotorDrive(0.0f);
 }
 
 // ----------------------------------------------------------------------------
@@ -70,6 +84,13 @@ bool powerIsBusy()
 void powerOnEnterReduced()
 {
   DEBUG_WIFI("entering reduced power — no clients, stopping web server + radio");
+  // Nobody can reach the page once the AP is off, so nothing may stay in a test
+  // mode: Speed Test would hold the needle off the sensor, Calibration Mode would
+  // keep the motor at the calibration drive, until a power cycle (V5.08).
+  autoFillStop("Stopped: WiFi went to sleep");
+  speedTestOn = false;
+  speedTestKph = 0;
+  calibrationModeOn = false;
   server.end();
   wifiManagerStopAP();
 }

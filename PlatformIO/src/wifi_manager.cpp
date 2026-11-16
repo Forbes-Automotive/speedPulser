@@ -209,6 +209,8 @@ void wifiManagerTick(void)
   }
   if (!g_wcfg.enableSta || g_staSsid[0] == '\0')
     return;
+  if (WiFi.getMode() == WIFI_OFF)
+    return; // reduced power: the radio stays off (the retry used to switch it back on every 5 min)
   const uint32_t now = millis();
   const bool nowConnected = (WiFi.status() == WL_CONNECTED);
   if (nowConnected && !g_staConnected)
@@ -418,6 +420,21 @@ void wifiManagerAttachStatic(AsyncWebServer &server)
                                                                                 { (void)request; return otaFsMounted(); });
 }
 
+// A browser always sends Origin on a cross-site POST. The JSON-only rule protects
+// the project's own POSTs, but these uploads and forms are "simple" requests a page
+// on another site could send (V5.08): refuse any whose Origin isn't this unit. No
+// Origin = not a cross-site browser request (curl, an older page's same-origin XHR).
+static bool sameOriginRequest(AsyncWebServerRequest *request)
+{
+  if (!request->hasHeader("Origin"))
+    return true;
+  String origin = request->header("Origin");
+  const int scheme = origin.indexOf("://");
+  if (scheme >= 0)
+    origin = origin.substring(scheme + 3);
+  return origin.equalsIgnoreCase(request->header("Host"));
+}
+
 void wifiManagerAttachSta(AsyncWebServer &server)
 {
   // GET /api/wifi/scan - async: the first call starts it and answers
@@ -459,6 +476,7 @@ void wifiManagerAttachSta(AsyncWebServer &server)
   // POST /api/wifi/sta/reset - forget the home network, back to AP only
   server.on("/api/wifi/sta/reset", HTTP_POST, [](AsyncWebServerRequest *request)
             {
+    if (!sameOriginRequest(request)) { request->send(403, "application/json", "{\"ok\":false,\"error\":\"Not from this unit's page\"}"); return; }
     g_staSsid[0] = '\0';
     g_staPass[0] = '\0';
     staSave();
@@ -482,6 +500,7 @@ void wifiManagerAttachSta(AsyncWebServer &server)
   // Empty ssid = disable. Applied from wifiManagerTick() so the response gets out first.
   server.on("/api/wifi/sta", HTTP_POST, [](AsyncWebServerRequest *request)
             {
+    if (!sameOriginRequest(request)) { request->send(403, "application/json", "{\"ok\":false,\"error\":\"Not from this unit's page\"}"); return; }
     if (!g_wcfg.enableSta) { request->send(400, "application/json", "{\"ok\":false,\"error\":\"Bridge mode is not available on this device\"}"); return; }
     String ssid = request->hasParam("ssid", true) ? request->getParam("ssid", true)->value() : "";
     String pwd = request->hasParam("password", true) ? request->getParam("password", true)->value() : "";

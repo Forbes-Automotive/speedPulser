@@ -3,204 +3,258 @@
 #include "speedPulser_voltage.h"
 #include "speedPulser_driveCal.h"
 
-void readEEP() {
-  DEBUG_EEP("initialising...");
+// ---------------------------------------------------------------------------
+// Settings in NVS (ESP32 Preferences).
+//
+// Every setting lives in ONE namespace, "hasNeedleSweep". (Up to V5.05 the code
+// called begin() once per setting name, but only the first call opens a
+// namespace, so that is where everything was saved. Renaming it would lose every
+// unit's settings.) Key names are kept as they were for the same reason, even
+// where the variable has a clearer name now.
+//
+// Speed Test is never saved: a unit always starts in normal running.
+// ---------------------------------------------------------------------------
 
-  // use ESP32's 'Preferences' to remember settings.  Begin by opening the various types.  Use 'false' for read/write.  True just gives read access
-  pref.begin("hasNeedleSweep", false);
-  pref.begin("testSpeedo", false);
-  pref.begin("offsetPositive", false);
-  pref.begin("tempSpeed", false);
-  pref.begin("maxFreqHall", false);
-  pref.begin("maxSpeed", false);
-  pref.begin("speedOffset", false);
-  pref.begin("convertToMPH", false);
-  pref.begin("motorPerfVal", false);
-  pref.begin("sweepSpeed", false);
-  pref.begin("averageFilter", false);
-  pref.begin("useCurve", false);
-  pref.begin("curveO0", false);
-  pref.begin("curveO1", false);
-  pref.begin("curveO2", false);
-  pref.begin("curveO3", false);
-  pref.begin("curveO4", false);
-  pref.begin("revDir", false);
-  pref.begin("fbEnable", false);
-  pref.begin("pidKp", false);
-  pref.begin("pidKi", false);
-  pref.begin("pidKd", false);
-  pref.begin("fbDeadband", false);
-  pref.begin("fbMaxFreq", false);
+static const char *SETTINGS_NAMESPACE = "hasNeedleSweep";
 
-  // first run comes with EEP valve of 255, so write actual values.  If found/match SW version, read all the values
-  if (pref.getUChar("testSpeedo") == 255) {
-    DEBUG_EEP("first run detected (raw=%u) — writing default settings", pref.getUChar("testSpeedo"));
-    pref.putBool("hasNeedleSweep", hasNeedleSweep);
-    pref.putBool("testSpeedo", testSpeedo);
-    pref.putBool("offsetPositive", speedOffsetPositive);
-    pref.putUShort("tempSpeed", tempSpeed);
-    pref.putUShort("maxFreqHall", maxFreqHall);
-    pref.putUShort("maxSpeed", maxSpeed);
-    pref.putUShort("speedOffset", speedOffset);
-    pref.putBool("convertToMPH", convertToMPH);
-    pref.putUChar("motorPerfVal", motorPerformanceVal);
-    pref.putUChar("sweepSpeed", sweepSpeed);
-    pref.putUChar("averageFilter", averageFilter);
-    pref.putBool("useCurve", useSpeedOffsetCurve);
-    pref.putShort("curveO0", speedOffsetCurveOffsets[0]);
-    pref.putShort("curveO1", speedOffsetCurveOffsets[1]);
-    pref.putShort("curveO2", speedOffsetCurveOffsets[2]);
-    pref.putShort("curveO3", speedOffsetCurveOffsets[3]);
-    pref.putShort("curveO4", speedOffsetCurveOffsets[4]);
-    pref.putBool("revDir", reverseDirection);
-    pref.putBool("fbEnable", feedbackEnable);
-    pref.putFloat("pidKp", pidKp);
-    pref.putFloat("pidKi", pidKi);
-    pref.putFloat("pidKd", pidKd);
-    pref.putFloat("fbDeadband", feedbackDeadband);
-    pref.putUShort("fbMinSpd", feedbackMinSpeed);
-    pref.putUShort("fbMaxFreq", feedbackMaxFreq);
-    pref.putBool("fbCaptured", topSpeedCaptured);
-    pref.putBool("vcEnable", voltageControlEnable);
-    pref.putFloat("vcPwmNom", vcPwmNominal);
-  } else {
-    hasNeedleSweep = pref.getBool("hasNeedleSweep", false);
-    testSpeedo = pref.getBool("testSpeedo", false);
-    speedOffsetPositive = pref.getBool("offsetPositive", true);
-    tempSpeed = pref.getUShort("tempSpeed", 100);
-    maxFreqHall = pref.getUShort("maxFreqHall", 200);
-    maxSpeed = pref.getUShort("maxSpeed", 200);
-    if (maxSpeed < 10) maxSpeed = 200;  // guard: maxSpeed is the feedback freq-scale divisor, never ~0
-    speedOffset = pref.getUShort("speedOffset", 0);
-    convertToMPH = pref.getBool("convertToMPH", false);
-    motorPerformanceVal = pref.getUChar("motorPerfVal", 0);
-    sweepSpeed = pref.getUChar("sweepSpeed", 18);
-    averageFilter = pref.getUChar("averageFilter", 6);
-    useSpeedOffsetCurve = pref.getBool("useCurve", false);
-    speedOffsetCurveOffsets[0] = pref.getShort("curveO0", 0);
-    speedOffsetCurveOffsets[1] = pref.getShort("curveO1", 0);
-    speedOffsetCurveOffsets[2] = pref.getShort("curveO2", 0);
-    speedOffsetCurveOffsets[3] = pref.getShort("curveO3", 0);
-    speedOffsetCurveOffsets[4] = pref.getShort("curveO4", 0);
-    feedbackEnable = pref.getBool("fbEnable", false);
-    pidKp = pref.getFloat("pidKp", 0.15f);
-    pidKi = pref.getFloat("pidKi", 1.3f);
-    pidKd = pref.getFloat("pidKd", 0.0f);
-    feedbackDeadband = pref.getFloat("fbDeadband", 1.5f);
-    feedbackMinSpeed = pref.getUShort("fbMinSpd", 40);
-    feedbackMaxFreq = pref.getUShort("fbMaxFreq", feedbackMaxFreq);
-    // Units updated from older firmware have no flag yet: treat any value other
-    // than the 254 Hz placeholder as a real capture so they keep their closed loop.
-    topSpeedCaptured = pref.getBool("fbCaptured", feedbackMaxFreq != 254);
-    voltageControlEnable = pref.getBool("vcEnable", true);
-    vcPwmNominal = pref.getFloat("vcPwmNom", vcPwmNominal);
+// The drive calibration table. On load the count comes from the table's own size;
+// the stored count only says "cleared" (0). So a non-zero count is written BEFORE
+// the table (V5.09): a power cut between the two writes then leaves the old table
+// (or none), never "0 marks" over a freshly written table. V5.05 and before needed
+// the two to agree, so a cut between them dropped the whole table.
+//
+// A loaded table is checked (V5.09): marks in rising speed order, speeds 1-400,
+// drives above 0 and no higher than the rail ceiling. Anything else is a corrupt
+// table: it would set a wrong top-speed cap or a wild drive, so it is dropped.
+static bool driveCalTableSane(const DriveCalPoint *pts, uint8_t n)
+{
+  for (uint8_t i = 0; i < n; i++)
+  {
+    const DriveCalPoint &p = pts[i];
+    if (p.speed < 1 || p.speed > 400 || !(p.drive > 0.0f) || p.drive > RAIL_V_CEIL || !(p.hz >= 0.0f))
+      return false;
+    if (i > 0 && p.speed <= pts[i - 1].speed)
+      return false;
   }
-
-  // V5 Test Board result and V5.01 drive settings + calibration marks. Read
-  // outside the first-run branch: units updated from older firmware have none of
-  // these keys yet, so they come up with the defaults / "not calibrated".
-  // Direction: V5.01 inverted the pin sense (unticked = correct way) and moved
-  // it from "reverseDir" to "revDir", so the old, inverted value is ignored and
-  // every unit comes up spinning the correct way.
-  reverseDirection = pref.getBool("revDir", false);
-  vcRailMaxV = pref.getFloat("vcRailMax", vcRailMaxV);
-  vcTrimGain = pref.getFloat("vcTrimG", vcTrimGain);
-  vcTrimLimit = pref.getFloat("vcTrimL", vcTrimLimit);
+  return true;
+}
+static void loadDriveCalTable()
+{
   driveCalCount = 0;
-  const uint8_t dcN = pref.getUChar("dcN", 0);
-  if (dcN > 0 && dcN <= DRIVE_CAL_MAX &&
-      pref.getBytesLength("dcPts") == sizeof(DriveCalPoint) * dcN) {
-    pref.getBytes("dcPts", driveCal, sizeof(DriveCalPoint) * dcN);
-    driveCalCount = dcN;
-  } else if (!pref.isKey("dcN")) {
+  const size_t blobBytes = settingsStore.getBytesLength("dcPts");
+  uint8_t n = (blobBytes % sizeof(DriveCalPoint) == 0) ? (uint8_t)(blobBytes / sizeof(DriveCalPoint)) : 0;
+  if (n > DRIVE_CAL_MAX)
+    n = 0;
+  // A table cleared by V5.05 or older left its old blob behind with dcN = 0.
+  if (settingsStore.isKey("dcN") && settingsStore.getUChar("dcN", 0) == 0)
+    n = 0;
+  if (n > 0)
+  {
+    DriveCalPoint loaded[DRIVE_CAL_MAX];
+    settingsStore.getBytes("dcPts", loaded, sizeof(DriveCalPoint) * n);
+    if (!driveCalTableSane(loaded, n))
+    {
+      DEBUG_EEP("drive cal table corrupt (%u marks): dropped", n);
+      return;
+    }
+    memcpy(driveCal, loaded, sizeof(DriveCalPoint) * n);
+    driveCalCount = n;
+    // V5.05 keeps each mark's source (eye / auto) in what used to be struct
+    // padding. Tables saved before that ("dcSrcV" missing) hold whatever the
+    // padding was, and every mark in them was set by eye.
+    if (!settingsStore.isKey("dcSrcV"))
+    {
+      for (uint8_t i = 0; i < n; i++)
+      {
+        driveCal[i].src = DCAL_SRC_EYE;
+        driveCal[i].rsv = 0;
+      }
+    }
+  }
+  else if (!settingsStore.isKey("dcN"))
+  {
     // V5.00 stored one top-speed point; carry it over as the first mark.
-    const uint16_t topSpd = pref.getUShort("calTopSpd", 0);
-    const float topHz = pref.getFloat("calTopHz", 0.0f);
-    const float topV = pref.getFloat("calTopV", 0.0f);
-    const float topPwm = pref.getFloat("calTopPwm", 0.0f);
-    if (topSpd > 0 && topV > 0.0f && topPwm > 0.0f) {
-      driveCal[0] = {topSpd, topHz, topV * topPwm, topV, topPwm};
+    const uint16_t topSpd = settingsStore.getUShort("calTopSpd", 0);
+    const float topHz = settingsStore.getFloat("calTopHz", 0.0f);
+    const float topV = settingsStore.getFloat("calTopV", 0.0f);
+    const float topPwm = settingsStore.getFloat("calTopPwm", 0.0f);
+    if (topSpd > 0 && topV > 0.0f && topPwm > 0.0f)
+    {
+      driveCal[0] = {topSpd, DCAL_SRC_EYE, 0, topHz, topV * topPwm, topV, topPwm};
       driveCalCount = 1;
       DEBUG_EEP("migrated V5.00 top point %u = %.1f Hz @ %.2f V x %.0f%%", topSpd, topHz, topV, topPwm * 100.0f);
     }
   }
-  if (boardHasVoltageControl) topSpeedCaptured = (driveCalCount > 0);
-  boardTestCode = pref.getUChar("btCode", BT_NOT_RUN);
-  for (uint8_t i = 0; i < BOARD_TEST_POINTS; i++) {
+}
+
+static void saveDriveCalTable()
+{
+  DriveCalPoint pts[DRIVE_CAL_MAX];
+  const uint8_t n = driveCalSnapshot(pts); // a consistent copy: another task may be changing it
+  if (n > 0)
+  {
+    settingsStore.putUChar("dcN", n); // first: see the note above loadDriveCalTable()
+    settingsStore.putBytes("dcPts", pts, sizeof(DriveCalPoint) * n);
+  }
+  else
+  {
+    settingsStore.putUChar("dcN", 0);
+    if (settingsStore.isKey("dcPts"))
+      settingsStore.remove("dcPts");
+  }
+  settingsStore.putUChar("dcSrcV", 1); // marks carry their source (V5.05)
+}
+
+// Keys older versions wrote that nothing reads any more (V5.09). Each stays until
+// the setting that replaced it has been saved once, so a unit still migrates.
+static void removeRetiredKeys()
+{
+  static const char *const RETIRED[] = {"averageFilter", "fbCaptured", "fbMaxFreq", "pidKp", "pidKi", "pidKd",
+                                        "tempSpeed", "testSpeedo", "vcEnable"};
+  for (const char *key : RETIRED)
+    if (settingsStore.isKey(key))
+      settingsStore.remove(key);
+  struct Replaced { const char *oldKey; const char *newKey; };
+  static const Replaced REPLACED[] = {{"maxFreqHall", "pulsesPerKm"}, {"speedOffset", "spdOffsetKph"},
+                                      {"offsetPositive", "spdOffsetKph"}, {"calTopSpd", "dcN"},
+                                      {"calTopHz", "dcN"}, {"calTopV", "dcN"}, {"calTopPwm", "dcN"}};
+  for (const Replaced &r : REPLACED)
+    if (settingsStore.isKey(r.newKey) && settingsStore.isKey(r.oldKey))
+      settingsStore.remove(r.oldKey);
+}
+
+void readEEP()
+{
+  settingsStore.begin(SETTINGS_NAMESPACE, false);
+
+  needleSweepOnBoot = settingsStore.getBool("hasNeedleSweep", needleSweepOnBoot);
+  needleSweepSpeed = constrain(settingsStore.getUChar("sweepSpeed", needleSweepSpeed), 1, 50);
+  presetId = settingsStore.getUChar("motorPerfVal", presetId);
+  maxSpeed = constrain(settingsStore.getUShort("maxSpeed", maxSpeed), 20, 400);
+  clusterInMph = settingsStore.getBool("convertToMPH", clusterInMph);
+  reverseDirection = settingsStore.getBool("revDir", false); // V5.01 key (see applyDirection)
+
+  // Speed sensor (V5.06): one "pulses per km" setting. Units from before carry
+  // their scale over from Max Hall Frequency at Max Speed.
+  if (settingsStore.isKey("pulsesPerKm"))
+  {
+    sensorPulsesPerKm = settingsStore.getFloat("pulsesPerKm", SENSOR_PULSES_PER_KM_DEFAULT);
+  }
+  else
+  {
+    const uint16_t oldMaxHallHz = settingsStore.getUShort("maxFreqHall", 0);
+    if (oldMaxHallHz > 0 && maxSpeed > 0)
+      sensorPulsesPerKm = 3600.0f * (float)oldMaxHallHz / (float)maxSpeed;
+  }
+  sensorPulsesPerKm = constrain(sensorPulsesPerKm, SENSOR_PULSES_PER_KM_MIN, SENSOR_PULSES_PER_KM_MAX);
+  inputSmoothingMs = constrain(settingsStore.getUShort("inSmoothMs", inputSmoothingMs),
+                               INPUT_SMOOTHING_MS_MIN, INPUT_SMOOTHING_MS_MAX);
+
+  // Global offset (V5.06): one signed value. Before, a size + a "positive" tick.
+  if (settingsStore.isKey("spdOffsetKph"))
+  {
+    globalSpeedOffsetKph = settingsStore.getShort("spdOffsetKph", 0);
+  }
+  else
+  {
+    const int16_t size = (int16_t)settingsStore.getUShort("speedOffset", 0);
+    globalSpeedOffsetKph = settingsStore.getBool("offsetPositive", true) ? size : -size;
+  }
+  globalSpeedOffsetKph = constrain(globalSpeedOffsetKph, -50, 50);
+  useSpeedOffsetCurve = settingsStore.getBool("useCurve", useSpeedOffsetCurve);
+  for (uint8_t i = 0; i < SPEED_OFFSET_CURVE_POINTS; i++)
+  {
+    char key[8];
+    snprintf(key, sizeof key, "curveO%u", (unsigned)i);
+    speedOffsetCurveOffsets[i] = constrain(settingsStore.getShort(key, 0), -20, 20);
+  }
+
+  // Voltage board: feedback (defaults from the V5.04 bench tuning) + drive settings.
+  feedbackEnable = settingsStore.getBool("fbEnable", feedbackEnable);
+  feedbackDeadband = constrain(settingsStore.getFloat("fbDeadband", feedbackDeadband), 0.0f, 5.0f);
+  feedbackMinSpeed = constrain(settingsStore.getUShort("fbMinSpd", feedbackMinSpeed), 0, 100);
+  pwmNominal = constrain(settingsStore.getFloat("vcPwmNom", pwmNominal), 0.2f, 1.0f);
+  railMaxV = constrain(settingsStore.getFloat("vcRailMax", railMaxV), RAIL_V_FLOOR, RAIL_V_CEIL);
+  trimGain = constrain(settingsStore.getFloat("vcTrimG", trimGain), 0.0f, 5.0f);
+  trimLimit = constrain(settingsStore.getFloat("vcTrimL", trimLimit), 0.0f, 0.5f);
+
+  loadDriveCalTable();
+  // V5.04 Minimum Rail. A unit updated from V5.01-V5.03 has no key: its marks were
+  // captured with the rail on the 3.0 V floor at the low end, so keep that split
+  // (the same drive at 4.8 V would run the needle roughly twice as fast) until the
+  // marks are recaptured. Uncalibrated units start on the 4.8 V default.
+  if (settingsStore.isKey("vcRailMin"))
+    railMinV = settingsStore.getFloat("vcRailMin", RAIL_V_MIN_DEFAULT);
+  else
+    railMinV = (driveCalCount > 0) ? RAIL_V_FLOOR : RAIL_V_MIN_DEFAULT;
+  railMinV = constrain(railMinV, RAIL_V_FLOOR, railMaxV);
+  driveCalBackupValid = settingsStore.isKey("dcBak");
+
+  // Test Board result and this board's own duty -> volts fit.
+  boardTestCode = settingsStore.getUChar("btCode", BT_NOT_RUN);
+  for (uint8_t i = 0; i < BOARD_TEST_POINTS; i++)
+  {
     char key[8];
     snprintf(key, sizeof key, "btV%u", (unsigned)i);
-    boardTestMeasV[i] = pref.getFloat(key, 0.0f);
+    boardTestMeasV[i] = settingsStore.getFloat(key, 0.0f);
   }
-  railFitV0 = pref.getFloat("btFitV0", RAIL_MODEL_V0);
-  railFitSlope = pref.getFloat("btFitK", RAIL_MODEL_SLOPE);
-  railFitValid = (boardTestCode == BT_PASS && railFitSlope < -6.0f && railFitSlope > -16.0f);
-  if (!railFitValid) {
+  railFitV0 = settingsStore.getFloat("btFitV0", RAIL_MODEL_V0);
+  railFitSlope = settingsStore.getFloat("btFitK", RAIL_MODEL_SLOPE);
+  railFitValid = (boardTestCode == BT_PASS && railFitSlope < -6.0f && railFitSlope > -16.0f &&
+                  railFitV0 > 11.0f && railFitV0 < 16.0f); // V5.09: the 0 % duty end checked too
+  if (!railFitValid)
+  {
     railFitV0 = RAIL_MODEL_V0;
     railFitSlope = RAIL_MODEL_SLOPE;
   }
-  syncFeedbackMaxFreq(); // Hz-at-maxSpeed follows the captured point
 
-  normaliseSpeedOffsetCurve();
-  DEBUG_EEP("loaded: sweep=%u speedo=%u off+=%u tempSpd=%u maxHz=%u maxSpd=%u offset=%u mph=%u calVal=%u sweepRate=%u curve=%u",
-            (unsigned)hasNeedleSweep, (unsigned)testSpeedo, (unsigned)speedOffsetPositive,
-            (unsigned)tempSpeed, (unsigned)maxFreqHall, (unsigned)maxSpeed, (unsigned)speedOffset,
-            (unsigned)convertToMPH, (unsigned)motorPerformanceVal, (unsigned)sweepSpeed,
-            (unsigned)useSpeedOffsetCurve);
-  DEBUG_EEP("feedback: dir=%s en=%u Kp=%.2f Ki=%.2f Kd=%.2f fbMaxHz=%u",
-            reverseDirection ? "REV" : "FWD", (unsigned)feedbackEnable,
-            pidKp, pidKi, pidKd, (unsigned)feedbackMaxFreq);
+  DEBUG_EEP("loaded: maxSpeed=%u km/h %.0f pulses/km smoothing=%u ms offset=%d%s mph=%u preset=%u sweep=%u/%u",
+            maxSpeed, sensorPulsesPerKm, inputSmoothingMs, globalSpeedOffsetKph,
+            useSpeedOffsetCurve ? " (curve)" : "", clusterInMph, presetId, needleSweepOnBoot,
+            needleSweepSpeed);
+  DEBUG_EEP("voltage: %u marks, rail %.1f-%.1f V, nominal PWM %.0f%%, feedback %s (deadband %.1f Hz, min %u)",
+            driveCalCount, railMinV, railMaxV, pwmNominal * 100.0f, feedbackEnable ? "on" : "off",
+            feedbackDeadband, feedbackMinSpeed);
+  removeRetiredKeys();
 }
 
-void writeEEP() {
-  // update EEP only if changes have been made
-  pref.putBool("hasNeedleSweep", hasNeedleSweep);
-  pref.putBool("testSpeedo", testSpeedo);
-  pref.putBool("offsetPositive", speedOffsetPositive);
-  pref.putUShort("tempSpeed", tempSpeed);
-  pref.putUShort("maxFreqHall", maxFreqHall);
-  pref.putUShort("maxSpeed", maxSpeed);
-  pref.putUShort("speedOffset", speedOffset);
-  pref.putBool("convertToMPH", convertToMPH);
-  pref.putUChar("motorPerfVal", motorPerformanceVal);
-  pref.putUChar("sweepSpeed", sweepSpeed);
-  pref.putUChar("averageFilter", averageFilter);
-  pref.putBool("useCurve", useSpeedOffsetCurve);
-  pref.putShort("curveO0", speedOffsetCurveOffsets[0]);
-  pref.putShort("curveO1", speedOffsetCurveOffsets[1]);
-  pref.putShort("curveO2", speedOffsetCurveOffsets[2]);
-  pref.putShort("curveO3", speedOffsetCurveOffsets[3]);
-  pref.putShort("curveO4", speedOffsetCurveOffsets[4]);
-  pref.putBool("revDir", reverseDirection);
-  pref.putBool("fbEnable", feedbackEnable);
-  pref.putFloat("pidKp", pidKp);
-  pref.putFloat("pidKi", pidKi);
-  pref.putFloat("pidKd", pidKd);
-  pref.putFloat("fbDeadband", feedbackDeadband);
-  pref.putUShort("fbMinSpd", feedbackMinSpeed);
-  pref.putUShort("fbMaxFreq", feedbackMaxFreq);
-  pref.putBool("fbCaptured", topSpeedCaptured);
-  pref.putBool("vcEnable", voltageControlEnable);
-  pref.putFloat("vcPwmNom", vcPwmNominal);
-  pref.putFloat("vcRailMax", vcRailMaxV);
-  pref.putFloat("vcTrimG", vcTrimGain);
-  pref.putFloat("vcTrimL", vcTrimLimit);
-  pref.putUChar("dcN", driveCalCount);
-  if (driveCalCount > 0) {
-    pref.putBytes("dcPts", driveCal, sizeof(DriveCalPoint) * driveCalCount);
+void writeEEP()
+{
+  settingsStore.putBool("hasNeedleSweep", needleSweepOnBoot);
+  settingsStore.putUChar("sweepSpeed", needleSweepSpeed);
+  settingsStore.putUChar("motorPerfVal", presetId);
+  settingsStore.putUShort("maxSpeed", maxSpeed);
+  settingsStore.putBool("convertToMPH", clusterInMph);
+  settingsStore.putBool("revDir", reverseDirection);
+  settingsStore.putFloat("pulsesPerKm", sensorPulsesPerKm);
+  settingsStore.putUShort("inSmoothMs", inputSmoothingMs);
+  settingsStore.putShort("spdOffsetKph", globalSpeedOffsetKph);
+  settingsStore.putBool("useCurve", useSpeedOffsetCurve);
+  for (uint8_t i = 0; i < SPEED_OFFSET_CURVE_POINTS; i++)
+  {
+    char key[8];
+    snprintf(key, sizeof key, "curveO%u", (unsigned)i);
+    settingsStore.putShort(key, speedOffsetCurveOffsets[i]);
   }
-  if (!boardTestActive) { // don't save a half-finished test
-    pref.putUChar("btCode", boardTestCode);
-    for (uint8_t i = 0; i < BOARD_TEST_POINTS; i++) {
+  settingsStore.putBool("fbEnable", feedbackEnable);
+  settingsStore.putFloat("fbDeadband", feedbackDeadband);
+  settingsStore.putUShort("fbMinSpd", feedbackMinSpeed);
+  settingsStore.putFloat("vcPwmNom", pwmNominal);
+  settingsStore.putFloat("vcRailMax", railMaxV);
+  settingsStore.putFloat("vcRailMin", railMinV);
+  settingsStore.putFloat("vcTrimG", trimGain);
+  settingsStore.putFloat("vcTrimL", trimLimit);
+  saveDriveCalTable();
+  if (!boardTestActive) // don't save a half-finished test
+  {
+    settingsStore.putUChar("btCode", boardTestCode);
+    for (uint8_t i = 0; i < BOARD_TEST_POINTS; i++)
+    {
       char key[8];
       snprintf(key, sizeof key, "btV%u", (unsigned)i);
-      pref.putFloat(key, boardTestMeasV[i]);
+      settingsStore.putFloat(key, boardTestMeasV[i]);
     }
-    pref.putFloat("btFitV0", railFitV0);
-    pref.putFloat("btFitK", railFitSlope);
+    settingsStore.putFloat("btFitV0", railFitV0);
+    settingsStore.putFloat("btFitK", railFitSlope);
   }
-
-  DEBUG_EEP("saved: maxHz=%u maxSpd=%u offset=%u mph=%u calVal=%u | fbEn=%u fbMaxHz=%u Kp=%.2f Ki=%.2f Kd=%.2f",
-            (unsigned)maxFreqHall, (unsigned)maxSpeed, (unsigned)speedOffset, (unsigned)convertToMPH,
-            (unsigned)motorPerformanceVal, (unsigned)feedbackEnable, (unsigned)feedbackMaxFreq,
-            pidKp, pidKi, pidKd);
 }

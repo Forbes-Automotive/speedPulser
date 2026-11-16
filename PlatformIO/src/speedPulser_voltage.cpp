@@ -14,21 +14,25 @@
 // ===== Board detection + live state =====
 bool  boardHasVoltageControl = false;
 bool  buckEnabled = false;
-float lastVoltageCmd = 0.0f;
 float lastRailCmdV = 0.0f;
 float lastPwmFrac = 0.0f;
 float lastDriveV = 0.0f;
 float motorRailV = 0.0f;
+float motorRailRawV = 0.0f; // last unsmoothed rail read (V)
+float railTripV = 0.0f;      // the reading that tripped the over-voltage check
+static uint32_t railCmdChangedMs = 0; // when the rail command last moved
 
 // ===== User configuration (defaults; overwritten from EEP) =====
-bool  voltageControlEnable = true;
-float vcPwmNominal = 0.80f; // PWM held while the rail does the work
-float vcRailMaxV   = RAIL_V_CEIL;
-float vcTrimGain   = 0.50f; // gentle: a 10 % speed error moves the drive 5 %/s
-float vcTrimLimit  = 0.20f; // feedback may move the calibrated drive by at most ±20 %
+float pwmNominal = 0.80f; // PWM held while the rail does the work
+float railMaxV   = RAIL_V_MAX_DEFAULT; // V5.08: 8 V for a new unit (was the 12 V ceiling); up to 12 V allowed
+float railMinV   = RAIL_V_MIN_DEFAULT; // rail held at the low end (V5.04); readEEP keeps 3.0 for old cals
+float trimGain   = 2.00f; // V5.04 bench-tuned: a 10 % speed error moves the drive 20 %/s
+                            // (0.5 took ~7 s to recover a load step; 3+ starts to wobble)
+float trimLimit  = 0.40f; // feedback may move the calibrated drive by at most ±40 % (a 0.1 V
+                            // rail shift needs ~30 % at 20 km/h; the top mark is capped at +5 %)
 
-// ===== Calibration =====
-float tempDriveV = 0.0f;
+// ===== Calibration Mode drive (V) =====
+float calibrationDriveV = 0.0f;
 
 // ===== Board test =====
 volatile bool boardTestActive = false;
@@ -49,6 +53,8 @@ void detectBoardVersion()
     pinMode(pinBoardVersion, INPUT_PULLUP);
     delayMicroseconds(50); // let the node settle through the internal pull-up
     boardHasVoltageControl = (digitalRead(pinBoardVersion) == LOW);
+    if (boardHasVoltageControl)
+        pinMode(pinBoardVersion, INPUT); // the 1k holds it LOW: the pull-up would only waste ~72 uA (V5.09)
     DEBUG_IO("board version: GPIO%d=%s -> %s", pinBoardVersion,
              boardHasVoltageControl ? "LOW" : "HIGH",
              boardHasVoltageControl ? "voltage board (buck voltage control)" : "legacy (PWM only)");
@@ -67,8 +73,29 @@ static float vadjDutyForVolts(float volts, bool useFit)
     return d;
 }
 
+#ifdef RAIL_HARD_MAX_V
+// Bench build: the ONE place the rail is set, so this cap covers every path
+// (legacy 9 V hold, drive split, needle sweep, calibration). Higher V_ADJ duty =
+// LOWER rail, so cap by a minimum duty — the larger of what the nominal model and
+// the board's own fit need to stay at or under RAIL_HARD_MAX_V.
+static float vadjMinDutyForCap()
+{
+    float dMin = (RAIL_HARD_MAX_V - RAIL_MODEL_V0) / RAIL_MODEL_SLOPE;
+    if (railFitValid && railFitSlope < -0.1f)
+    {
+        const float dFit = (RAIL_HARD_MAX_V - railFitV0) / railFitSlope;
+        if (dFit > dMin) dMin = dFit;
+    }
+    return dMin > 1.0f ? 1.0f : dMin;
+}
+#endif
+
 static void writeVadjDuty(float d01)
 {
+#ifdef RAIL_HARD_MAX_V
+    const float dMin = vadjMinDutyForCap();
+    if (d01 < dMin) d01 = dMin;
+#endif
     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_VADJ, (uint32_t)(d01 * (float)VADJ_DUTY_MAX + 0.5f));
     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_VADJ);
 }
@@ -78,17 +105,25 @@ void setMotorRailVolts(float volts)
     if (!boardHasVoltageControl) return;
     if (volts < RAIL_V_FLOOR) volts = RAIL_V_FLOOR;
     if (volts > RAIL_V_CEIL) volts = RAIL_V_CEIL;
+#ifdef RAIL_HARD_MAX_V
+    if (volts > RAIL_HARD_MAX_V) volts = RAIL_HARD_MAX_V;
+#endif
+    if (fabsf(volts - lastRailCmdV) > 0.2f)
+        railCmdChangedMs = millis(); // the over-voltage check waits for the rail to follow
     lastRailCmdV = volts;
-    lastVoltageCmd = (volts - RAIL_V_FLOOR) / (RAIL_V_CEIL - RAIL_V_FLOOR);
     writeVadjDuty(vadjDutyForVolts(volts, railFitValid));
 }
 
 // ===== Drive -> rail + PWM =====
-// Minimum Rail is always the hardware floor: a higher one only gives away the
-// smooth rail-only range at the bottom. Maximum Rail is the user's, kept inside
-// what the hardware can make.
-static float railLoV() { return RAIL_V_FLOOR; }
-static float railHiV() { return constrain(vcRailMaxV, railLoV(), RAIL_V_CEIL); }
+// V5.04: Minimum Rail is a setting again (default RAIL_V_MIN_DEFAULT). Bench
+// tests on the TY3816B (2026-11-15, on a cluster) showed the motor's own driver
+// only behaves properly with a rail of ~4.75 V or more: from 3.1 to 4.6 V low
+// speeds jump, stall and won't restart, while at 4.8 V the PWM alone runs it
+// smoothly from ~2 % (8 Hz) up, starting from rest every time. So the low end is
+// now run on a fixed, healthy rail with the PWM doing the work.
+// Maximum Rail is the user's, kept inside what the hardware can make.
+static float railHiV() { return constrain(railMaxV, RAIL_V_FLOOR, RAIL_V_CEIL); }
+static float railLoV() { return constrain(railMinV, RAIL_V_FLOOR, railHiV()); }
 
 float driveMaxV()
 {
@@ -105,7 +140,7 @@ uint16_t applyMotorDrive(float driveV)
     if (!boardHasVoltageControl) return 0;
     const float lo = railLoV();
     const float hi = railHiV();
-    const float pn = (vcPwmNominal > 0.05f) ? vcPwmNominal : 0.05f;
+    const float pn = (pwmNominal > 0.05f) ? pwmNominal : 0.05f;
     if (driveV < 0.0f) driveV = 0.0f;
     if (driveV > hi) driveV = hi;
 
@@ -122,6 +157,8 @@ uint16_t applyMotorDrive(float driveV)
         pwm = driveV / hi;
     }
     if (pwm > 1.0f) pwm = 1.0f;
+    if (driveV <= 0.0f)
+        rail = RAIL_V_FLOOR; // motor off: idle the rail at the floor, not at Minimum Rail
 
     lastDriveV = driveV;
     lastPwmFrac = pwm;
@@ -166,17 +203,22 @@ void initVoltageControl()
     // GPIO1 is ADC1 — ADC2 is unusable while WiFi is up.
     analogSetPinAttenuation(pinMotorSense, ADC_11db);
 
-    // Start at the minimum rail (safe) before the buck is enabled.
-    setMotorRailVolts(railLoV());
+    // Start at the hardware floor (safe) before the buck is enabled.
+    setMotorRailVolts(RAIL_V_FLOOR);
     DEBUG_IO("voltage control ready (V_ADJ GPIO%d, EN GPIO%d, sense GPIO%d) — buck OFF, V=min (%.2f V, %s)",
              pinVoltageAdjust, pinBuckEnable, pinMotorSense, lastRailCmdV,
              railFitValid ? "board fit" : "nominal model");
 }
 
+// Latched when the rail reads too high (see updateMotorRail). Motor off, buck off,
+// and enableBuck() refuses until a reboot.
+volatile bool railTripped = false;
+
 void enableBuck()
 {
     if (!boardHasVoltageControl || buckEnabled) return;
-    setMotorRailVolts(railLoV());      // guarantee a safe (low) rail first
+    if (railTripped) return;
+    setMotorRailVolts(RAIL_V_FLOOR);   // guarantee a safe (low) rail first
     digitalWrite(pinBuckEnable, HIGH); // GPIO7 HIGH = enable
     buckEnabled = true;
     DEBUG_IO("buck enabled (GPIO%d HIGH)", pinBuckEnable);
@@ -212,6 +254,36 @@ void updateMotorRail()
 {
     if (!boardHasVoltageControl) return;
     const float v = readMotorRailVolts();
+    motorRailRawV = v;
+
+    // Over-voltage (V5.08, every build): the rail well above its command for half a
+    // second means the V_ADJ injection has failed (GPIO6 stuck low leaves the rail
+    // near 13.8 V). The buck can only push the rail up, so with the motor off a
+    // lowered rail takes seconds to fall: the command must have been steady for
+    // RAIL_OV_SETTLE_MS before a high reading counts.
+    static uint8_t overTicks = 0;
+    const bool over = buckEnabled && (millis() - railCmdChangedMs) > RAIL_OV_SETTLE_MS &&
+                      v > lastRailCmdV + RAIL_OV_MARGIN_V;
+    overTicks = over ? (uint8_t)(overTicks < 255 ? overTicks + 1 : 255) : 0;
+    if (overTicks >= RAIL_OV_TICKS && !railTripped)
+    {
+        setMotorDutyRaw(0);
+        disableBuck();
+        railTripped = true;
+        railTripV = v;
+        DEBUG_IO("rail over-voltage: %.2f V with %.2f V commanded - motor off, buck off (reboot to clear)",
+                 v, lastRailCmdV);
+    }
+#ifdef RAIL_TRIP_V
+    if (v > RAIL_TRIP_V && !railTripped)
+    {
+        setMotorDutyRaw(0);
+        disableBuck();
+        railTripped = true;
+        Serial.printf("TRIP rail %.2f V > %.2f V - motor off, buck off (reboot to clear)\n",
+                      v, (float)RAIL_TRIP_V);
+    }
+#endif
     motorRailV += 0.3f * (v - motorRailV); // light EMA for a steady UI read-out
 }
 
@@ -336,10 +408,7 @@ static void boardTestTask(void *)
              boardTestText(code), v0, k, worstErr);
 
     // Hand the rail back exactly as boot leaves it; the control task takes over.
-    if (voltageControlEnable)
-        applyMotorDrive(0.0f);
-    else
-        setMotorRailVolts(RAIL_V_LEGACY);
+    applyMotorDrive(0.0f);
     boardTestActive = false; // results are persisted by the periodic writeEEP
     vTaskDelete(NULL);
 }
@@ -347,11 +416,21 @@ static void boardTestTask(void *)
 bool startBoardTest()
 {
     if (boardTestActive) return false;
+#ifdef RAIL_HARD_MAX_V
+    return false; // bench build: the test steps the rail to 7.5 / 10 V — never here
+#endif
     if (!boardHasVoltageControl)
     {
         boardTestCode = BT_LEGACY; // nothing to drive: the strap already says PWM-only
         return true;
     }
+    // Steps up to BOARD_TEST_TOP_V, but never past Maximum rail (V5.09): a motor kept
+    // to a lower rail on purpose mustn't get 10 V from the test. The web handler
+    // refuses the test below BOARD_TEST_MIN_TOP_V (too short a line to fit).
+    const float top = railMaxV < BOARD_TEST_TOP_V ? railMaxV : BOARD_TEST_TOP_V;
+    boardTestTargetV[0] = BOARD_TEST_BOTTOM_V;
+    boardTestTargetV[1] = (BOARD_TEST_BOTTOM_V + top) / 2.0f;
+    boardTestTargetV[2] = top;
     boardTestActive = true; // the control task yields the motor + rail from here
     if (xTaskCreatePinnedToCore(boardTestTask, "boardTest", 4096, NULL,
                                 tskIDLE_PRIORITY + 1, NULL, 0) != pdPASS)

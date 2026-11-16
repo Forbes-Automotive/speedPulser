@@ -3,22 +3,14 @@
 
 #include <Arduino.h>
 
-// ===== Task Handles =====
-extern TaskHandle_t eepromTaskHandle;
-extern TaskHandle_t speedControlTaskHandle;
+// Two tasks: the 100 ms control task (speedPulser_control.cpp) and the settings
+// save task. WiFi power is handled by power_manager (see power_manager.h).
+#define SETTINGS_TASK_PRIORITY    (tskIDLE_PRIORITY + 1)
+#define SPEED_TASK_PRIORITY       (tskIDLE_PRIORITY + 2) // control runs ahead of saving
 
-// ===== Task Configuration =====
-#define EEPROM_TASK_PRIORITY    (tskIDLE_PRIORITY + 1)
-#define SPEED_TASK_PRIORITY     (tskIDLE_PRIORITY + 2)  // Higher priority for speed control
+#define SETTINGS_TASK_STACK_SIZE  4096
+#define SPEED_TASK_STACK_SIZE     8192 // Auto Fill saves the backup table (JSON + NVS) from this task
 
-#define EEPROM_TASK_STACK_SIZE  4096
-#define SPEED_TASK_STACK_SIZE   8192   // headroom for PID float math + DEBUG_FB Serial.printf("%f"),
-                                       // which only runs on the feedback path
+void taskInit(void);
 
-// ===== Task Function Declarations =====
-void eepromTask(void *parameter);    // EEPROM save task (every 2 seconds)
-void speedControlTask(void *parameter); // Speed control task (PID loop)
-void taskInit(void);                 // Initialize all tasks
-// NOTE: WiFi management is handled by power_manager — see power_manager.h.
-
-#endif  // SPEED_PULSER_TASKS_H
+#endif // SPEED_PULSER_TASKS_H
