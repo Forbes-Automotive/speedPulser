@@ -1,7 +1,24 @@
 {
   "product": "SpeedPulser",
-  "latest": "5.02",
+  "latest": "5.09",
   "releases": [
+    {
+      "version": "5.09",
+      "channel": "stable",
+      "date": "2026-11-17",
+      "ota": true,
+      "notes": "Motor feedback timed per revolution (steady down to the motor's slowest speed), Minimum Rail setting, Auto Fill drive calibration (capture the top mark by eye, the rest is measured, up to 20 marks, Restore Previous), even needle sweep through the calibration. Safety audit: refused out-of-range settings, uncalibrated boards don't drive the motor, OTA only when stopped, tests end when WiFi sleeps, rail over-voltage trip. Speed sensor set as pulses per km. Web UI rebuilt in Setup steps and shared with SpeedPulser Pro. Saved settings are kept.",
+      "firmware": {
+        "path": "V5.09/firmware.bin",
+        "size": 1284048,
+        "sha256": "ff748c2fad271eb584554dafc298f929e3b8e6387eb0b4de6e5659d1724317db"
+      },
+      "filesystem": {
+        "path": "V5.09/littlefs.bin",
+        "size": 655360,
+        "sha256": "34f7682f7c93bd35472b6df64efd0fb9e41f2205201dd19174598d1ee1e04464"
+      }
+    },
     {
       "version": "5.02",
       "channel": "stable",
