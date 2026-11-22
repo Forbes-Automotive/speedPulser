@@ -1,7 +1,24 @@
 {
   "product": "SpeedPulser",
-  "latest": "5.09",
+  "latest": "5.10",
   "releases": [
+    {
+      "version": "5.10",
+      "channel": "stable",
+      "date": "2026-11-22",
+      "ota": true,
+      "notes": "Phone touch UI: no long-press copy menu, scrolling never moves a slider, and a swipe over the chart scrolls the page. Calibration Curve: a full-screen button (sideways on an upright phone, pinch zoom); with a custom calibration in Calibration Mode, hold a point and slide it up or down to change its speed (saved when you let go).",
+      "firmware": {
+        "path": "V5.10/firmware.bin",
+        "size": 1284704,
+        "sha256": "9818ef746db993cf1b9b5eb9a5d91c4938e1cab5cc3c028d564a99ef1d3a5b25"
+      },
+      "filesystem": {
+        "path": "V5.10/littlefs.bin",
+        "size": 655360,
+        "sha256": "5fb08922c39ff4b3370ef340d1291d862c7cac5ae388748827133d7498f9ec07"
+      }
+    },
     {
       "version": "5.09",
       "channel": "stable",
