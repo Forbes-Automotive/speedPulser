@@ -92,6 +92,8 @@ The control box closes with a single M3 screw at the lug. You only need to open 
 
 The board has two plug-in connectors, both **JST XH (2.5 mm pitch)**: a 3-pin **input** plug for the car and a 5-pin **motor** plug.
 
+![SpeedPulser V5 board: input plug (1 +12 V, 2 ground, 3 speed signal), motor plug (1 motor +, 2 feedback, 3 direction, 4 ground, 5 PWM), the pull-up / pull-down jumper and the ESP32-C3 module sockets](../Images/pcb-top.png)
+
 ### Input plug (3-pin)
 
 ![Input plug, 3-pin JST XH: 1 +12 V ignition, 2 ground, 3 speed signal](../Images/manual/plug-input.svg)
