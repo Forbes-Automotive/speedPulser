@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 282" width="560" height="282" font-family="Segoe UI, Roboto, Arial, sans-serif">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="280" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#0b0f14">Motor plug (5-pin JST XH)</text>
+<text x="280" y="46" text-anchor="middle" font-size="12" fill="#55606b">Plug face, latch ribs up. Colours are the motor&#x27;s own leads.</text>
+<rect x="150" y="78" width="260" height="70" rx="10" fill="#e9edf1" stroke="#0b0f14" stroke-width="2"/>
+<rect x="164" y="69" width="232" height="9" fill="#cfd6dd" stroke="#0b0f14" stroke-width="1.5"/>
+<rect x="173" y="98" width="30" height="30" rx="4" fill="#ffffff" stroke="#0b0f14" stroke-width="1.5"/>
+<text x="188" y="118" text-anchor="middle" font-size="14" font-weight="700" fill="#0b0f14">1</text>
+<rect x="219" y="98" width="30" height="30" rx="4" fill="#ffffff" stroke="#0b0f14" stroke-width="1.5"/>
+<text x="234" y="118" text-anchor="middle" font-size="14" font-weight="700" fill="#0b0f14">2</text>
+<rect x="265" y="98" width="30" height="30" rx="4" fill="#ffffff" stroke="#0b0f14" stroke-width="1.5"/>
+<text x="280" y="118" text-anchor="middle" font-size="14" font-weight="700" fill="#0b0f14">3</text>
+<rect x="311" y="98" width="30" height="30" rx="4" fill="#ffffff" stroke="#0b0f14" stroke-width="1.5"/>
+<text x="326" y="118" text-anchor="middle" font-size="14" font-weight="700" fill="#0b0f14">4</text>
+<rect x="357" y="98" width="30" height="30" rx="4" fill="#ffffff" stroke="#0b0f14" stroke-width="1.5"/>
+<text x="372" y="118" text-anchor="middle" font-size="14" font-weight="700" fill="#0b0f14">5</text>
+<line x1="188" y1="148" x2="188" y2="192" stroke="#0b0f14" stroke-width="10" stroke-linecap="round"/>
+<line x1="188" y1="148" x2="188" y2="192" stroke="#d7263d" stroke-width="7.5" stroke-linecap="round"/>
+<text transform="translate(185,208) rotate(38)" font-size="12.5" fill="#0b0f14">Motor +</text>
+<line x1="234" y1="148" x2="234" y2="192" stroke="#0b0f14" stroke-width="10" stroke-linecap="round"/>
+<line x1="234" y1="148" x2="234" y2="192" stroke="#f4f4f4" stroke-width="7.5" stroke-linecap="round"/>
+<text transform="translate(231,208) rotate(38)" font-size="12.5" fill="#0b0f14">Feedback (FG)</text>
+<line x1="280" y1="148" x2="280" y2="192" stroke="#0b0f14" stroke-width="10" stroke-linecap="round"/>
+<line x1="280" y1="148" x2="280" y2="192" stroke="#f2c230" stroke-width="7.5" stroke-linecap="round"/>
+<text transform="translate(277,208) rotate(38)" font-size="12.5" fill="#0b0f14">Direction</text>
+<line x1="326" y1="148" x2="326" y2="192" stroke="#0b0f14" stroke-width="10" stroke-linecap="round"/>
+<line x1="326" y1="148" x2="326" y2="192" stroke="#1b1b1b" stroke-width="7.5" stroke-linecap="round"/>
+<text transform="translate(323,208) rotate(38)" font-size="12.5" fill="#0b0f14">Motor ground</text>
+<line x1="372" y1="148" x2="372" y2="192" stroke="#0b0f14" stroke-width="10" stroke-linecap="round"/>
+<line x1="372" y1="148" x2="372" y2="192" stroke="#2b6cd4" stroke-width="7.5" stroke-linecap="round"/>
+<text transform="translate(369,208) rotate(38)" font-size="12.5" fill="#0b0f14">PWM</text>
+</svg>
